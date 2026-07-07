@@ -1,0 +1,23 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Play-Television Launcher Icon Foreground Silhoutte -->
+    <!-- Screen Frame -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M18,24 h72 c2.2,0 4,1.8 4,4 v40 c0,2.2 -1.8,4 -4,4 H18 c-2.2,0 -4,-1.8 -4,-4 V28 C14,25.8 15.8,24 18,24 z" />
+    <!-- Screen Glass Inset -->
+    <path
+        android:fillColor="#121212"
+        android:pathData="M22,28 h64 v32 H22 z" />
+    <!-- Stand / Legs -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M38,72 l6,8 h20 l6,-8 z" />
+    <!-- Play Triangle symbol inside Screen -->
+    <path
+        android:fillColor="#E50914"
+        android:pathData="M48,36 l18,10 l-18,10 z" />
+</vector>

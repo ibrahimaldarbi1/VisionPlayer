@@ -1,0 +1,6 @@
+{
+  "name": "Vision Player",
+  "description": "A premium white-label IPTV player with dynamic feature configurations for Android phone and Android TV.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

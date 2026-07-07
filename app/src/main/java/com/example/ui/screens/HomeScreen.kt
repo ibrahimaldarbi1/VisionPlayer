@@ -34,6 +34,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -61,9 +62,21 @@ fun HomeScreen(
     // Dynamic state triggered by active provider profile configurations
     val profile = ProviderConfigRegistry.currentProfile
     var activeTab by remember { mutableStateOf("HOME") }
+    val coroutineScope = rememberCoroutineScope()
 
     // Repository states
     val favorites by repository.favorites.collectAsState(initial = emptyList())
+
+    val toggleFavorite: (FavoriteEntity) -> Unit = { favorite ->
+        coroutineScope.launch {
+            val isFav = favorites.any { it.contentId == favorite.contentId && it.contentType == favorite.contentType }
+            if (isFav) {
+                repository.removeFavorite(favorite.contentId, favorite.contentType)
+            } else {
+                repository.addFavorite(favorite)
+            }
+        }
+    }
     val continueWatching by repository.continueWatching.collectAsState(initial = emptyList())
     val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
 
@@ -163,7 +176,8 @@ fun HomeScreen(
                         onPlayEpisode = onPlayEpisode,
                         onSeriesClick = { activeSeriesDetail = it },
                         isTv = isTv,
-                        onTabSelected = { activeTab = it }
+                        onTabSelected = { activeTab = it },
+                        onToggleFavorite = toggleFavorite
                     )
                     "LIVE" -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
@@ -174,7 +188,9 @@ fun HomeScreen(
                             onPlayLive = onPlayLive,
                             repository = repository,
                             isTv = isTv,
-                            profile = profile
+                            profile = profile,
+                            favorites = favorites,
+                            onToggleFavorite = toggleFavorite
                         )
                     }
                     "MOVIES" -> if (profile.features.moviesEnabled) {
@@ -186,7 +202,9 @@ fun HomeScreen(
                             onPlayMovie = onPlayMovie,
                             repository = repository,
                             isTv = isTv,
-                            profile = profile
+                            profile = profile,
+                            favorites = favorites,
+                            onToggleFavorite = toggleFavorite
                         )
                     }
                     "SERIES" -> if (profile.features.seriesEnabled) {
@@ -198,7 +216,9 @@ fun HomeScreen(
                             onSeriesClick = { activeSeriesDetail = it },
                             repository = repository,
                             isTv = isTv,
-                            profile = profile
+                            profile = profile,
+                            favorites = favorites,
+                            onToggleFavorite = toggleFavorite
                         )
                     }
                     "EPG" -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
@@ -219,7 +239,9 @@ fun HomeScreen(
                             onPlayMovie = onPlayMovie,
                             onSeriesClick = { activeSeriesDetail = it },
                             isTv = isTv,
-                            profile = profile
+                            profile = profile,
+                            favorites = favorites,
+                            onToggleFavorite = toggleFavorite
                         )
                     }
                     "SETTINGS" -> SettingsView(
@@ -508,366 +530,42 @@ fun HomeDashboardView(
     onPlayEpisode: (Series, Episode) -> Unit,
     onSeriesClick: (Series) -> Unit,
     isTv: Boolean,
-    onTabSelected: (String) -> Unit
+    onTabSelected: (String) -> Unit,
+    onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // Welcome Header / Continue Watching Featured Bento
-        item {
-            var isHeroFocused by remember { mutableStateOf(false) }
-            val firstContinue = continueWatching.firstOrNull()
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (isTv) 220.dp else 170.dp)
-                    .onFocusChanged { isHeroFocused = it.isFocused }
-                    .focusable()
-                    .clickable {
-                        if (firstContinue != null) {
-                            if (firstContinue.contentType == "MOVIE") {
-                                onPlayMovie(
-                                    Movie(
-                                        id = firstContinue.contentId,
-                                        title = firstContinue.title,
-                                        streamUrl = firstContinue.streamUrl,
-                                        posterUrl = firstContinue.posterOrLogo,
-                                        backdropUrl = firstContinue.posterOrLogo,
-                                        categoryId = "",
-                                        categoryName = "",
-                                        description = ""
-                                    )
-                                )
-                            } else {
-                                onPlayEpisode(
-                                    Series(
-                                        id = firstContinue.parentId,
-                                        title = firstContinue.parentTitle,
-                                        posterUrl = firstContinue.posterOrLogo,
-                                        backdropUrl = firstContinue.posterOrLogo,
-                                        categoryId = "",
-                                        categoryName = "",
-                                        description = ""
-                                    ),
-                                    Episode(
-                                        id = firstContinue.contentId,
-                                        seriesId = firstContinue.parentId,
-                                        seasonId = "",
-                                        seasonNumber = firstContinue.seasonNumber,
-                                        episodeNumber = firstContinue.episodeNumber,
-                                        title = firstContinue.title,
-                                        streamUrl = firstContinue.streamUrl,
-                                        description = ""
-                                    )
-                                )
-                            }
-                        } else {
-                            // Fallback click - go to live TV
-                            onTabSelected("LIVE")
-                        }
-                    }
-                    .border(
-                        width = 2.dp,
-                        color = if (isHeroFocused) Color.White else Color(0xFF334155).copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(28.dp)
-                    ),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B))
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    // Pulsing / animated subtle background glow
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color(profile.branding.primaryColor).copy(alpha = 0.25f),
-                                        Color(0xFF0F0F0F).copy(alpha = 0.95f)
-                                    )
-                                )
-                            )
-                    )
-                    
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(20.dp),
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = if (firstContinue != null) "CONTINUE WATCHING" else "FEATURED CONTENT",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(profile.branding.primaryColor)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = firstContinue?.title ?: "The Last Of Us",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.White,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = if (firstContinue != null) {
-                                    if (firstContinue.contentType == "EPISODE") "S${firstContinue.seasonNumber} E${firstContinue.episodeNumber} • ${firstContinue.title}" else "Movie"
-                                } else "S01 E05 • Endure and Survive",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.LightGray,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        // Progress indicator mimicking HTML's slider bar
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            val progressFloat = if (firstContinue != null) {
-                                firstContinue.positionMs.toFloat() / firstContinue.durationMs.toFloat()
-                            } else {
-                                0.65f
-                            }
-                            LinearProgressIndicator(
-                                progress = { progressFloat },
-                                color = Color(profile.branding.primaryColor),
-                                trackColor = Color(0xFF334155),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(4.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Grid Section (Bento Grid representing Live, Movies, Series categories)
-        item {
-            Column(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = "Browse Library",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-
-                Row(
+        if (recentlyWatched.isEmpty() && continueWatching.isEmpty() && favorites.isEmpty()) {
+            item {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isTv) 230.dp else 190.dp),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        .padding(top = 48.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Live TV (Tall Bento)
-                    var isLiveFocused by remember { mutableStateOf(false) }
-                    Card(
-                        modifier = Modifier
-                            .weight(1.1f)
-                            .fillMaxHeight()
-                            .onFocusChanged { isLiveFocused = it.isFocused }
-                            .focusable()
-                            .clickable { onTabSelected("LIVE") }
-                            .border(
-                                width = 2.dp,
-                                color = if (isLiveFocused) Color.White else Color(0xFF334155).copy(alpha = 0.5f),
-                                shape = RoundedCornerShape(28.dp)
-                            ),
-                        shape = RoundedCornerShape(28.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.primaryColor))
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp)
-                        ) {
-                            // Subtle background details
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .offset(x = 16.dp, y = (-16).dp)
-                                    .size(90.dp)
-                                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(45.dp))
-                            )
-
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Tv,
-                                            contentDescription = "Live TV",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    Text(
-                                        text = "Live TV",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = "1,240 Channels",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.White.copy(alpha = 0.8f)
-                                    )
-                                }
-
-                                // Now on box
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
-                                        .padding(vertical = 6.dp, horizontal = 10.dp)
-                                ) {
-                                    Column {
-                                        Text(
-                                            text = "NOW ON",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.White.copy(alpha = 0.6f),
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "Sky Sports F1",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.White,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Movies and Series
                     Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Movies Bento Block
-                        var isMoviesFocused by remember { mutableStateOf(false) }
-                        Card(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .onFocusChanged { isMoviesFocused = it.isFocused }
-                                .focusable()
-                                .clickable { onTabSelected("MOVIES") }
-                                .border(
-                                    width = 2.dp,
-                                    color = if (isMoviesFocused) Color.White else Color(0xFF334155).copy(alpha = 0.5f),
-                                    shape = RoundedCornerShape(24.dp)
-                                ),
-                            shape = RoundedCornerShape(24.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(Color(0xFF262626), RoundedCornerShape(10.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Movie,
-                                        contentDescription = "Movies",
-                                        tint = Color(profile.branding.primaryColor),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = "Movies",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = "4.5k+ Titles",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
-                                }
-                            }
-                        }
-
-                        // Series Bento Block
-                        var isSeriesFocused by remember { mutableStateOf(false) }
-                        Card(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                                .onFocusChanged { isSeriesFocused = it.isFocused }
-                                .focusable()
-                                .clickable { onTabSelected("SERIES") }
-                                .border(
-                                    width = 2.dp,
-                                    color = if (isSeriesFocused) Color.White else Color(0xFF334155).copy(alpha = 0.5f),
-                                    shape = RoundedCornerShape(24.dp)
-                                ),
-                            shape = RoundedCornerShape(24.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor))
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(Color(0xFF262626), RoundedCornerShape(10.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.VideoLibrary,
-                                        contentDescription = "Series",
-                                        tint = Color(profile.branding.primaryColor),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = "Series",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Text(
-                                        text = "820 Shows",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
-                                }
-                            }
-                        }
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Empty Dashboard",
+                            tint = Color.Gray,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Text(
+                            text = "Welcome to Vision Player!",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "Use the navigation bar above to browse Live TV, Movies, or TV Shows.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Gray,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }
@@ -986,6 +684,8 @@ fun HomeDashboardView(
                                 title = fav.title,
                                 imageUrl = fav.posterOrLogo,
                                 subtitle = fav.contentType,
+                                isFavorite = true,
+                                onFavoriteToggle = { onToggleFavorite(fav) },
                                 onClick = {
                                     when (fav.contentType) {
                                         "LIVE" -> {
@@ -1098,7 +798,9 @@ fun LiveChannelsView(
     onPlayLive: (LiveChannel) -> Unit,
     repository: IptvRepository,
     isTv: Boolean,
-    profile: com.example.config.ProviderProfile
+    profile: com.example.config.ProviderProfile,
+    favorites: List<FavoriteEntity> = emptyList(),
+    onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
     val coroutineScope = rememberCoroutineScope()
     var isAdultUnlocked by remember { mutableStateOf(false) }
@@ -1201,11 +903,28 @@ fun LiveChannelsView(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(channels) { channel ->
+                val isFav = favorites.any { it.contentId == channel.id && it.contentType == "LIVE" }
                 FocusableItemCard(
                     title = channel.name,
                     imageUrl = channel.logoUrl,
                     subtitle = channel.categoryName,
                     isLocked = channel.isAdult,
+                    isFavorite = isFav,
+                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                        {
+                            onToggleFavorite(
+                                FavoriteEntity(
+                                    contentId = channel.id,
+                                    contentType = "LIVE",
+                                    title = channel.name,
+                                    posterOrLogo = channel.logoUrl,
+                                    streamUrl = channel.streamUrl,
+                                    categoryId = channel.categoryId,
+                                    categoryName = channel.categoryName
+                                )
+                            )
+                        }
+                    } else null,
                     onClick = {
                         if (channel.isAdult && !isAdultUnlocked) {
                             pinRequiredChannel = channel
@@ -1230,7 +949,9 @@ fun MoviesLibraryView(
     onPlayMovie: (Movie) -> Unit,
     repository: IptvRepository,
     isTv: Boolean,
-    profile: com.example.config.ProviderProfile
+    profile: com.example.config.ProviderProfile,
+    favorites: List<FavoriteEntity> = emptyList(),
+    onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
@@ -1264,10 +985,27 @@ fun MoviesLibraryView(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(movies) { movie ->
+                val isFav = favorites.any { it.contentId == movie.id && it.contentType == "MOVIE" }
                 FocusableItemCard(
                     title = movie.title,
                     imageUrl = movie.posterUrl,
                     subtitle = movie.genre,
+                    isFavorite = isFav,
+                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                        {
+                            onToggleFavorite(
+                                FavoriteEntity(
+                                    contentId = movie.id,
+                                    contentType = "MOVIE",
+                                    title = movie.title,
+                                    posterOrLogo = movie.posterUrl,
+                                    streamUrl = movie.streamUrl,
+                                    categoryId = movie.categoryId,
+                                    categoryName = movie.categoryName
+                                )
+                            )
+                        }
+                    } else null,
                     onClick = { onPlayMovie(movie) }
                 )
             }
@@ -1286,7 +1024,9 @@ fun SeriesLibraryView(
     onSeriesClick: (Series) -> Unit,
     repository: IptvRepository,
     isTv: Boolean,
-    profile: com.example.config.ProviderProfile
+    profile: com.example.config.ProviderProfile,
+    favorites: List<FavoriteEntity> = emptyList(),
+    onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
@@ -1320,10 +1060,27 @@ fun SeriesLibraryView(
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             items(seriesList) { series ->
+                val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
                 FocusableItemCard(
                     title = series.title,
                     imageUrl = series.posterUrl,
                     subtitle = series.genre,
+                    isFavorite = isFav,
+                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                        {
+                            onToggleFavorite(
+                                FavoriteEntity(
+                                    contentId = series.id,
+                                    contentType = "SERIES",
+                                    title = series.title,
+                                    posterOrLogo = series.posterUrl,
+                                    streamUrl = "",
+                                    categoryId = series.categoryId,
+                                    categoryName = series.categoryName
+                                )
+                            )
+                        }
+                    } else null,
                     onClick = { onSeriesClick(series) }
                 )
             }
@@ -1505,7 +1262,9 @@ fun SearchPanel(
     onPlayMovie: (Movie) -> Unit,
     onSeriesClick: (Series) -> Unit,
     isTv: Boolean,
-    profile: com.example.config.ProviderProfile
+    profile: com.example.config.ProviderProfile,
+    favorites: List<FavoriteEntity> = emptyList(),
+    onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -1539,10 +1298,27 @@ fun SearchPanel(
                         Text("Live Channels", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(results.liveChannels) { chan ->
+                                val isFav = favorites.any { it.contentId == chan.id && it.contentType == "LIVE" }
                                 FocusableItemCard(
                                     title = chan.name,
                                     imageUrl = chan.logoUrl,
                                     subtitle = "Live TV",
+                                    isFavorite = isFav,
+                                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                                        {
+                                            onToggleFavorite(
+                                                FavoriteEntity(
+                                                    contentId = chan.id,
+                                                    contentType = "LIVE",
+                                                    title = chan.name,
+                                                    posterOrLogo = chan.logoUrl,
+                                                    streamUrl = chan.streamUrl,
+                                                    categoryId = chan.categoryId,
+                                                    categoryName = chan.categoryName
+                                                )
+                                            )
+                                        }
+                                    } else null,
                                     onClick = { onPlayLive(chan) }
                                 )
                             }
@@ -1554,10 +1330,27 @@ fun SearchPanel(
                         Text("Movies Catalog", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(results.movies) { movie ->
+                                val isFav = favorites.any { it.contentId == movie.id && it.contentType == "MOVIE" }
                                 FocusableItemCard(
                                     title = movie.title,
                                     imageUrl = movie.posterUrl,
                                     subtitle = movie.genre,
+                                    isFavorite = isFav,
+                                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                                        {
+                                            onToggleFavorite(
+                                                FavoriteEntity(
+                                                    contentId = movie.id,
+                                                    contentType = "MOVIE",
+                                                    title = movie.title,
+                                                    posterOrLogo = movie.posterUrl,
+                                                    streamUrl = movie.streamUrl,
+                                                    categoryId = movie.categoryId,
+                                                    categoryName = movie.categoryName
+                                                )
+                                            )
+                                        }
+                                    } else null,
                                     onClick = { onPlayMovie(movie) }
                                 )
                             }
@@ -1569,10 +1362,27 @@ fun SearchPanel(
                         Text("TV Shows & Series", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(results.series) { series ->
+                                val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
                                 FocusableItemCard(
                                     title = series.title,
                                     imageUrl = series.posterUrl,
                                     subtitle = series.genre,
+                                    isFavorite = isFav,
+                                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                                        {
+                                            onToggleFavorite(
+                                                FavoriteEntity(
+                                                    contentId = series.id,
+                                                    contentType = "SERIES",
+                                                    title = series.title,
+                                                    posterOrLogo = series.posterUrl,
+                                                    streamUrl = "",
+                                                    categoryId = series.categoryId,
+                                                    categoryName = series.categoryName
+                                                )
+                                            )
+                                        }
+                                    } else null,
                                     onClick = { onSeriesClick(series) }
                                 )
                             }
@@ -1838,6 +1648,8 @@ fun FocusableItemCard(
     imageUrl: String,
     subtitle: String,
     isLocked: Boolean = false,
+    isFavorite: Boolean = false,
+    onFavoriteToggle: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -1883,6 +1695,24 @@ fun FocusableItemCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.Lock, "Locked", tint = Color.Red, modifier = Modifier.size(14.dp))
+                }
+            }
+            if (onFavoriteToggle != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .size(24.dp)
+                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+                        .clickable { onFavoriteToggle() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = "Toggle Favorite",
+                        tint = if (isFavorite) Color.Red else Color.White,
+                        modifier = Modifier.size(14.dp)
+                    )
                 }
             }
             Column(

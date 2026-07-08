@@ -429,6 +429,65 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         dao.clearParentalSettings()
     }
 
+    // --- Football Schedule Module ---
+
+    val footballPrefs by lazy { FootballPrefs(context) }
+
+    suspend fun getFootballOptions(providerId: String): FootballOptionsResponse? = withContext(Dispatchers.IO) {
+        try {
+            val client = FootballApiClient()
+            client.getFootballOptions(providerId)
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to fetch football options", e)
+            null
+        }
+    }
+
+    suspend fun getFootballSchedule(
+        providerId: String,
+        selectedCompetitionCodes: List<String>,
+        selectedTeamIds: List<Int>
+    ): List<FootballWatchMatch> = withContext(Dispatchers.IO) {
+        if (selectedCompetitionCodes.isEmpty() && selectedTeamIds.isEmpty()) {
+            return@withContext emptyList()
+        }
+        try {
+            val client = FootballApiClient()
+            val codesParam = if (selectedCompetitionCodes.isNotEmpty()) selectedCompetitionCodes.joinToString(",") else null
+            val idsParam = if (selectedTeamIds.isNotEmpty()) selectedTeamIds.joinToString(",") else null
+            
+            val response = client.getFootballSchedule(providerId, codesParam, idsParam)
+            if (response.enabled == false) {
+                return@withContext emptyList()
+            }
+            val matches = response.matches ?: return@withContext emptyList()
+            
+            // Load all available channels to match against
+            val channels = try {
+                getLiveChannels(null).firstOrNull() ?: emptyList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+
+            matches.map { match ->
+                val kickoffMillis = FootballMatchUtils.parseUtcToMillis(match.kickoffUtc)
+                val fromTime = kickoffMillis - (2 * 3600 * 1000) // kickoff - 2 hours
+                val toTime = kickoffMillis + (3 * 3600 * 1000)   // kickoff + 3 hours
+                
+                val epgInWindow = if (kickoffMillis > 0) {
+                    dao.getEpgProgramsInWindow(fromTime, toTime)
+                } else {
+                    emptyList()
+                }
+
+                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, channels)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to fetch football schedule", e)
+            emptyList()
+        }
+    }
+
     suspend fun loadHome(providerId: String): Result<HomeResponse> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = com.example.config.ProviderConfigRegistry.currentProfile.backendBaseUrl

@@ -10,7 +10,7 @@ data class ProviderProfile(
     val branding: BrandingConfig,
     val support: SupportConfig,
     val layoutMode: LayoutMode = LayoutMode.PREMIUM_STREAMING,
-    val backendBaseUrl: String = "https://iptv-trending-api.onrender.com",
+    val backendBaseUrl: String = "https://iptv-trending-backend.onrender.com",
     val providerId: String = "provider_001"
 )
 

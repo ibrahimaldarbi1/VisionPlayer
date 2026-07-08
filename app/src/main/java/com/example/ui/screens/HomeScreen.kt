@@ -67,7 +67,6 @@ fun HomeScreen(
     // Home recommendations ViewModel state
     val homeViewModel = remember(repository) { HomeViewModel(repository) }
     val homeUiState by homeViewModel.uiState.collectAsState()
-    var activeTmdbDetail by remember { mutableStateOf<HomeItem?>(null) }
 
     LaunchedEffect(profile) {
         homeViewModel.loadHomeData(profile.providerId)
@@ -188,7 +187,51 @@ fun HomeScreen(
                         onTabSelected = { activeTab = it },
                         onToggleFavorite = toggleFavorite,
                         homeUiState = homeUiState,
-                        onTmdbItemClick = { activeTmdbDetail = it }
+                        onTmdbItemClick = { item ->
+                            coroutineScope.launch {
+                                if (item.mediaType == "tv") {
+                                    val matched = repository.findMatchingSeries(item.title ?: "")
+                                    if (matched != null) {
+                                        activeSeriesDetail = matched
+                                    } else {
+                                        val dynamicSeries = Series(
+                                            id = "dynamic_series_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
+                                            title = item.title ?: "Untitled Series",
+                                            posterUrl = item.posterUrl ?: "",
+                                            backdropUrl = item.backdropUrl ?: "",
+                                            categoryId = "trending",
+                                            categoryName = "Trending",
+                                            description = item.overview ?: "No description available.",
+                                            year = item.firstAirDate?.take(4) ?: "2024",
+                                            genre = "Trending TV",
+                                            rating = String.format(java.util.Locale.US, "%.1f", item.voteAverage ?: 0.0)
+                                        )
+                                        activeSeriesDetail = dynamicSeries
+                                    }
+                                } else {
+                                    val matched = repository.findMatchingMovie(item.title ?: "")
+                                    if (matched != null) {
+                                        onPlayMovie(matched)
+                                    } else {
+                                        val dynamicMovie = Movie(
+                                            id = "dynamic_movie_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
+                                            title = item.title ?: "Untitled Movie",
+                                            streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                                            posterUrl = item.posterUrl ?: "",
+                                            backdropUrl = item.backdropUrl ?: "",
+                                            categoryId = "trending",
+                                            categoryName = "Trending",
+                                            description = item.overview ?: "No description available.",
+                                            year = item.releaseDate?.take(4) ?: "2024",
+                                            duration = "2h 00m",
+                                            genre = "Trending Movie",
+                                            rating = String.format(java.util.Locale.US, "%.1f", item.voteAverage ?: 0.0)
+                                        )
+                                        onPlayMovie(dynamicMovie)
+                                    }
+                                }
+                            }
+                        }
                     )
                     "LIVE" -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
@@ -275,14 +318,6 @@ fun HomeScreen(
             profile = profile,
             onPlayEpisode = onPlayEpisode,
             onDismiss = { activeSeriesDetail = null }
-        )
-    }
-
-    activeTmdbDetail?.let { item ->
-        TmdbPlaceholderDetailDialog(
-            item = item,
-            profile = profile,
-            onDismiss = { activeTmdbDetail = null }
         )
     }
 }
@@ -2335,207 +2370,4 @@ fun SeriesDetailsDialog(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TmdbPlaceholderDetailDialog(
-    item: HomeItem,
-    profile: com.example.config.ProviderProfile,
-    onDismiss: () -> Unit
-) {
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onDismiss
-    ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-            shape = RoundedCornerShape(24.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .wrapContentHeight()
-                .border(1.dp, Color(0xFF334155).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
-                .testTag("tmdb_placeholder_dialog")
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-            ) {
-                // Header Toolbar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = if (item.mediaType == "tv") "TV Series Details" else "Movie Details",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
-                    }
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Layout
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Poster Image
-                    Box(
-                        modifier = Modifier
-                            .width(110.dp)
-                            .height(165.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.DarkGray)
-                    ) {
-                        if (!item.posterUrl.isNullOrBlank()) {
-                            AsyncImage(
-                                model = item.posterUrl,
-                                contentDescription = item.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            // Placeholder
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Movie,
-                                    contentDescription = "Placeholder",
-                                    tint = Color.Gray,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // Metadata Column
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = item.title ?: "Untitled",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Year badge
-                            val year = (if (item.mediaType == "tv") item.firstAirDate else item.releaseDate)
-                                ?.take(4) ?: "N/A"
-                            Text(
-                                text = year,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.LightGray
-                            )
-
-                            // Rating
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Star,
-                                    contentDescription = "Rating",
-                                    tint = Color(0xFFFFD700),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = String.format("%.1f", item.voteAverage ?: 0.0),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = Color.LightGray
-                                )
-                            }
-                        }
-
-                        // Badges for dynamic info
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SuggestionChip(
-                                onClick = {},
-                                label = { Text(text = item.mediaType?.uppercase() ?: "UNKNOWN") },
-                                colors = SuggestionChipDefaults.suggestionChipColors(
-                                    labelColor = Color.LightGray
-                                )
-                            )
-                            SuggestionChip(
-                                onClick = {},
-                                label = { Text(text = "ID: ${item.tmdbId ?: 0}") },
-                                colors = SuggestionChipDefaults.suggestionChipColors(
-                                    labelColor = Color.LightGray
-                                )
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Overview text
-                Text(
-                    text = "Overview",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = item.overview ?: "No overview available.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.LightGray,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Callout/Alert Banner for the placeholder stream linking warning
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.primaryColor).copy(alpha = 0.15f)),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Trending Recommendation Info",
-                            tint = Color(profile.branding.primaryColor),
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Text(
-                            text = "This title is from our Trending recommendations. It will be linked to the provider VOD stream once available in the IPTV library.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.White,
-                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Dismiss Button
-                Button(
-                    onClick = onDismiss,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                ) {
-                    Text("Close", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-    }
-}

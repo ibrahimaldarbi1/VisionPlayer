@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
@@ -211,7 +212,14 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 e.printStackTrace()
             }
         }
-        emit(IptvMockData.Seasons.filter { it.seriesId == seriesId })
+        val localSeasons = IptvMockData.Seasons.filter { it.seriesId == seriesId }
+        if (localSeasons.isEmpty()) {
+            emit(listOf(
+                Season(id = "${seriesId}_s1", seriesId = seriesId, seasonNumber = 1, title = "Season 1")
+            ))
+        } else {
+            emit(localSeasons)
+        }
     }.flowOn(Dispatchers.IO)
 
     fun getEpisodes(seriesId: String, seasonId: String): Flow<List<Episode>> = flow {
@@ -227,7 +235,35 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 e.printStackTrace()
             }
         }
-        emit(IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == seasonId })
+        val localEpisodes = IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == seasonId }
+        if (localEpisodes.isEmpty()) {
+            emit(listOf(
+                Episode(
+                    id = "${seriesId}_e1",
+                    seriesId = seriesId,
+                    seasonId = seasonId,
+                    seasonNumber = 1,
+                    episodeNumber = 1,
+                    title = "Episode 1: Pilot",
+                    streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                    description = "Introduction to the trending series.",
+                    duration = "45m"
+                ),
+                Episode(
+                    id = "${seriesId}_e2",
+                    seriesId = seriesId,
+                    seasonId = seasonId,
+                    seasonNumber = 1,
+                    episodeNumber = 2,
+                    title = "Episode 2: The Rising",
+                    streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+                    description = "The journey continues with unexpected turns.",
+                    duration = "45m"
+                )
+            ))
+        } else {
+            emit(localEpisodes)
+        }
     }.flowOn(Dispatchers.IO)
 
     // --- Search Module (Global search filtered by enabled features) ---
@@ -390,6 +426,24 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         } catch (e: Exception) {
             android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId", e)
             Result.failure(e)
+        }
+    }
+
+    suspend fun findMatchingMovie(title: String): Movie? = withContext(Dispatchers.IO) {
+        try {
+            val movies = getMovies(null).firstOrNull() ?: emptyList()
+            movies.firstOrNull { it.title.equals(title, ignoreCase = true) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun findMatchingSeries(title: String): Series? = withContext(Dispatchers.IO) {
+        try {
+            val seriesList = getSeries(null).firstOrNull() ?: emptyList()
+            seriesList.firstOrNull { it.title.equals(title, ignoreCase = true) }
+        } catch (e: Exception) {
+            null
         }
     }
 }

@@ -379,6 +379,19 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     suspend fun clearParentalSettings() {
         dao.clearParentalSettings()
     }
+
+    suspend fun loadHome(providerId: String): Result<HomeResponse> = withContext(Dispatchers.IO) {
+        try {
+            val baseUrl = com.example.config.ProviderConfigRegistry.currentProfile.backendBaseUrl
+            android.util.Log.d("IptvRepository", "Loading home from: $baseUrl/api/v1/home?provider_id=$providerId")
+            val client = HomeApiClient(baseUrl)
+            val response = client.getHome(providerId)
+            Result.success(response)
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId", e)
+            Result.failure(e)
+        }
+    }
 }
 
 data class SearchResults(

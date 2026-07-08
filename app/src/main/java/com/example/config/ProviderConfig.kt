@@ -9,7 +9,9 @@ data class ProviderProfile(
     val features: FeatureConfig,
     val branding: BrandingConfig,
     val support: SupportConfig,
-    val layoutMode: LayoutMode = LayoutMode.PREMIUM_STREAMING
+    val layoutMode: LayoutMode = LayoutMode.PREMIUM_STREAMING,
+    val backendBaseUrl: String = "https://iptv-trending-api.onrender.com",
+    val providerId: String = "provider_001"
 )
 
 enum class LayoutMode {

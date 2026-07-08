@@ -64,6 +64,15 @@ fun HomeScreen(
     var activeTab by remember { mutableStateOf("HOME") }
     val coroutineScope = rememberCoroutineScope()
 
+    // Home recommendations ViewModel state
+    val homeViewModel = remember(repository) { HomeViewModel(repository) }
+    val homeUiState by homeViewModel.uiState.collectAsState()
+    var activeTmdbDetail by remember { mutableStateOf<HomeItem?>(null) }
+
+    LaunchedEffect(profile) {
+        homeViewModel.loadHomeData(profile.providerId)
+    }
+
     // Repository states
     val favorites by repository.favorites.collectAsState(initial = emptyList())
 
@@ -177,7 +186,9 @@ fun HomeScreen(
                         onSeriesClick = { activeSeriesDetail = it },
                         isTv = isTv,
                         onTabSelected = { activeTab = it },
-                        onToggleFavorite = toggleFavorite
+                        onToggleFavorite = toggleFavorite,
+                        homeUiState = homeUiState,
+                        onTmdbItemClick = { activeTmdbDetail = it }
                     )
                     "LIVE" -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
@@ -264,6 +275,14 @@ fun HomeScreen(
             profile = profile,
             onPlayEpisode = onPlayEpisode,
             onDismiss = { activeSeriesDetail = null }
+        )
+    }
+
+    activeTmdbDetail?.let { item ->
+        TmdbPlaceholderDetailDialog(
+            item = item,
+            profile = profile,
+            onDismiss = { activeTmdbDetail = null }
         )
     }
 }
@@ -531,13 +550,18 @@ fun HomeDashboardView(
     onSeriesClick: (Series) -> Unit,
     isTv: Boolean,
     onTabSelected: (String) -> Unit,
-    onToggleFavorite: (FavoriteEntity) -> Unit = {}
+    onToggleFavorite: (FavoriteEntity) -> Unit = {},
+    homeUiState: HomeUiState = HomeUiState.Loading,
+    onTmdbItemClick: (HomeItem) -> Unit = {}
 ) {
+    val hasLocalContent = recentlyWatched.isNotEmpty() || continueWatching.isNotEmpty() || favorites.isNotEmpty()
+    val hasDynamicContent = homeUiState is HomeUiState.Success && (homeUiState.homeResponse.rows?.any { it.items?.isNotEmpty() == true } == true)
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        if (recentlyWatched.isEmpty() && continueWatching.isEmpty() && favorites.isEmpty()) {
+        if (!hasLocalContent && !hasDynamicContent && homeUiState !is HomeUiState.Loading) {
             item {
                 Box(
                     modifier = Modifier
@@ -567,6 +591,60 @@ fun HomeDashboardView(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
+            }
+        }
+
+        // --- DYNAMIC HOMESCREEN ROWS (Trending recommendation rows from the backend API) ---
+        if (homeUiState is HomeUiState.Success) {
+            val rows = homeUiState.homeResponse.rows ?: emptyList()
+            rows.forEach { row ->
+                val items = row.items ?: emptyList()
+                if (items.isNotEmpty()) {
+                    item {
+                        Column {
+                            Text(
+                                text = row.title ?: "Recommendations",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(items) { item ->
+                                    FocusableItemCard(
+                                        title = item.title ?: "Untitled",
+                                        imageUrl = item.posterUrl ?: "",
+                                        subtitle = if (item.mediaType == "tv") "TV Series" else "Movie",
+                                        onClick = { onTmdbItemClick(item) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (homeUiState is HomeUiState.Loading) {
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = Color(profile.branding.primaryColor),
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Text(
+                        text = "Loading recommendations...",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }
@@ -802,6 +880,7 @@ fun LiveChannelsView(
     favorites: List<FavoriteEntity> = emptyList(),
     onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
+    var searchQuery by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
     var isAdultUnlocked by remember { mutableStateOf(false) }
     var pinRequiredChannel by remember { mutableStateOf<LiveChannel?>(null) }
@@ -870,6 +949,31 @@ fun LiveChannelsView(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Search Filter Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Filter channels by name...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search Filter") },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(profile.branding.primaryColor),
+                focusedLabelColor = Color(profile.branding.primaryColor),
+                unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("filter_live_channels")
+        )
+
         // Categories horizontal list
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
             item {
@@ -896,43 +1000,67 @@ fun LiveChannelsView(
             }
         }
 
-        // Live Channels vertical grid
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(channels) { channel ->
-                val isFav = favorites.any { it.contentId == channel.id && it.contentType == "LIVE" }
-                FocusableItemCard(
-                    title = channel.name,
-                    imageUrl = channel.logoUrl,
-                    subtitle = channel.categoryName,
-                    isLocked = channel.isAdult,
-                    isFavorite = isFav,
-                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
-                        {
-                            onToggleFavorite(
-                                FavoriteEntity(
-                                    contentId = channel.id,
-                                    contentType = "LIVE",
-                                    title = channel.name,
-                                    posterOrLogo = channel.logoUrl,
-                                    streamUrl = channel.streamUrl,
-                                    categoryId = channel.categoryId,
-                                    categoryName = channel.categoryName
-                                )
-                            )
-                        }
-                    } else null,
-                    onClick = {
-                        if (channel.isAdult && !isAdultUnlocked) {
-                            pinRequiredChannel = channel
-                        } else {
-                            onPlayLive(channel)
-                        }
-                    }
+        val filteredChannels = remember(channels, searchQuery) {
+            if (searchQuery.isBlank()) {
+                channels
+            } else {
+                channels.filter { it.name.contains(searchQuery, ignoreCase = true) }
+            }
+        }
+
+        if (filteredChannels.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No channels match \"$searchQuery\"",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyMedium
                 )
+            }
+        } else {
+            // Live Channels vertical grid
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(filteredChannels) { channel ->
+                    val isFav = favorites.any { it.contentId == channel.id && it.contentType == "LIVE" }
+                    FocusableItemCard(
+                        title = channel.name,
+                        imageUrl = channel.logoUrl,
+                        subtitle = channel.categoryName,
+                        isLocked = channel.isAdult,
+                        isFavorite = isFav,
+                        onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                            {
+                                onToggleFavorite(
+                                    FavoriteEntity(
+                                        contentId = channel.id,
+                                        contentType = "LIVE",
+                                        title = channel.name,
+                                        posterOrLogo = channel.logoUrl,
+                                        streamUrl = channel.streamUrl,
+                                        categoryId = channel.categoryId,
+                                        categoryName = channel.categoryName
+                                    )
+                                )
+                            }
+                        } else null,
+                        onClick = {
+                            if (channel.isAdult && !isAdultUnlocked) {
+                                pinRequiredChannel = channel
+                            } else {
+                                onPlayLive(channel)
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -953,7 +1081,34 @@ fun MoviesLibraryView(
     favorites: List<FavoriteEntity> = emptyList(),
     onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        // Search Filter Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Filter movies by title...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search Filter") },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(profile.branding.primaryColor),
+                focusedLabelColor = Color(profile.branding.primaryColor),
+                unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("filter_movies")
+        )
+
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
             item {
                 FilterChip(
@@ -979,35 +1134,59 @@ fun MoviesLibraryView(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(movies) { movie ->
-                val isFav = favorites.any { it.contentId == movie.id && it.contentType == "MOVIE" }
-                FocusableItemCard(
-                    title = movie.title,
-                    imageUrl = movie.posterUrl,
-                    subtitle = movie.genre,
-                    isFavorite = isFav,
-                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
-                        {
-                            onToggleFavorite(
-                                FavoriteEntity(
-                                    contentId = movie.id,
-                                    contentType = "MOVIE",
-                                    title = movie.title,
-                                    posterOrLogo = movie.posterUrl,
-                                    streamUrl = movie.streamUrl,
-                                    categoryId = movie.categoryId,
-                                    categoryName = movie.categoryName
-                                )
-                            )
-                        }
-                    } else null,
-                    onClick = { onPlayMovie(movie) }
+        val filteredMovies = remember(movies, searchQuery) {
+            if (searchQuery.isBlank()) {
+                movies
+            } else {
+                movies.filter { it.title.contains(searchQuery, ignoreCase = true) }
+            }
+        }
+
+        if (filteredMovies.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No movies match \"$searchQuery\"",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyMedium
                 )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(filteredMovies) { movie ->
+                    val isFav = favorites.any { it.contentId == movie.id && it.contentType == "MOVIE" }
+                    FocusableItemCard(
+                        title = movie.title,
+                        imageUrl = movie.posterUrl,
+                        subtitle = movie.genre,
+                        isFavorite = isFav,
+                        onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                            {
+                                onToggleFavorite(
+                                    FavoriteEntity(
+                                        contentId = movie.id,
+                                        contentType = "MOVIE",
+                                        title = movie.title,
+                                        posterOrLogo = movie.posterUrl,
+                                        streamUrl = movie.streamUrl,
+                                        categoryId = movie.categoryId,
+                                        categoryName = movie.categoryName
+                                    )
+                                )
+                            }
+                        } else null,
+                        onClick = { onPlayMovie(movie) }
+                    )
+                }
             }
         }
     }
@@ -1028,7 +1207,34 @@ fun SeriesLibraryView(
     favorites: List<FavoriteEntity> = emptyList(),
     onToggleFavorite: (FavoriteEntity) -> Unit = {}
 ) {
+    var searchQuery by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize()) {
+        // Search Filter Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("Filter series by title...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search Filter") },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            },
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Color(profile.branding.primaryColor),
+                focusedLabelColor = Color(profile.branding.primaryColor),
+                unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("filter_series")
+        )
+
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
             item {
                 FilterChip(
@@ -1054,35 +1260,59 @@ fun SeriesLibraryView(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(seriesList) { series ->
-                val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
-                FocusableItemCard(
-                    title = series.title,
-                    imageUrl = series.posterUrl,
-                    subtitle = series.genre,
-                    isFavorite = isFav,
-                    onFavoriteToggle = if (profile.features.favoritesEnabled) {
-                        {
-                            onToggleFavorite(
-                                FavoriteEntity(
-                                    contentId = series.id,
-                                    contentType = "SERIES",
-                                    title = series.title,
-                                    posterOrLogo = series.posterUrl,
-                                    streamUrl = "",
-                                    categoryId = series.categoryId,
-                                    categoryName = series.categoryName
-                                )
-                            )
-                        }
-                    } else null,
-                    onClick = { onSeriesClick(series) }
+        val filteredSeries = remember(seriesList, searchQuery) {
+            if (searchQuery.isBlank()) {
+                seriesList
+            } else {
+                seriesList.filter { it.title.contains(searchQuery, ignoreCase = true) }
+            }
+        }
+
+        if (filteredSeries.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No series match \"$searchQuery\"",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyMedium
                 )
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(filteredSeries) { series ->
+                    val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
+                    FocusableItemCard(
+                        title = series.title,
+                        imageUrl = series.posterUrl,
+                        subtitle = series.genre,
+                        isFavorite = isFav,
+                        onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                            {
+                                onToggleFavorite(
+                                    FavoriteEntity(
+                                        contentId = series.id,
+                                        contentType = "SERIES",
+                                        title = series.title,
+                                        posterOrLogo = series.posterUrl,
+                                        streamUrl = "",
+                                        categoryId = series.categoryId,
+                                        categoryName = series.categoryName
+                                    )
+                                )
+                            }
+                        } else null,
+                        onClick = { onSeriesClick(series) }
+                    )
+                }
             }
         }
     }
@@ -2099,6 +2329,211 @@ fun SeriesDetailsDialog(
                     item {
                         Spacer(modifier = Modifier.height(16.dp))
                     }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TmdbPlaceholderDetailDialog(
+    item: HomeItem,
+    profile: com.example.config.ProviderProfile,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight()
+                .border(1.dp, Color(0xFF334155).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                .testTag("tmdb_placeholder_dialog")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                // Header Toolbar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (item.mediaType == "tv") "TV Series Details" else "Movie Details",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Layout
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Poster Image
+                    Box(
+                        modifier = Modifier
+                            .width(110.dp)
+                            .height(165.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.DarkGray)
+                    ) {
+                        if (!item.posterUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = item.posterUrl,
+                                contentDescription = item.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            // Placeholder
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Movie,
+                                    contentDescription = "Placeholder",
+                                    tint = Color.Gray,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // Metadata Column
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = item.title ?: "Untitled",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Year badge
+                            val year = (if (item.mediaType == "tv") item.firstAirDate else item.releaseDate)
+                                ?.take(4) ?: "N/A"
+                            Text(
+                                text = year,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.LightGray
+                            )
+
+                            // Rating
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "Rating",
+                                    tint = Color(0xFFFFD700),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = String.format("%.1f", item.voteAverage ?: 0.0),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.LightGray
+                                )
+                            }
+                        }
+
+                        // Badges for dynamic info
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SuggestionChip(
+                                onClick = {},
+                                label = { Text(text = item.mediaType?.uppercase() ?: "UNKNOWN") },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    labelColor = Color.LightGray
+                                )
+                            )
+                            SuggestionChip(
+                                onClick = {},
+                                label = { Text(text = "ID: ${item.tmdbId ?: 0}") },
+                                colors = SuggestionChipDefaults.suggestionChipColors(
+                                    labelColor = Color.LightGray
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Overview text
+                Text(
+                    text = "Overview",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = item.overview ?: "No overview available.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.LightGray,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Callout/Alert Banner for the placeholder stream linking warning
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.primaryColor).copy(alpha = 0.15f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Trending Recommendation Info",
+                            tint = Color(profile.branding.primaryColor),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "This title is from our Trending recommendations. It will be linked to the provider VOD stream once available in the IPTV library.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White,
+                            lineHeight = androidx.compose.ui.unit.TextUnit.Unspecified
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Dismiss Button
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                ) {
+                    Text("Close", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
         }

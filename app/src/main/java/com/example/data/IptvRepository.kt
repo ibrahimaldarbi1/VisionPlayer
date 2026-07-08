@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
@@ -466,41 +469,82 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         return clean.trim()
     }
 
+    private fun toAlphanumeric(text: String): String {
+        return text.lowercase().replace(Regex("[^a-z0-9]"), "")
+    }
+
     suspend fun findMatchingMovie(title: String): Movie? = withContext(Dispatchers.IO) {
         try {
-            if (cachedAllMovies == null) {
-                cachedAllMovies = getMovies(null).firstOrNull() ?: emptyList()
+            if (cachedAllMovies.isNullOrEmpty()) {
+                val session = dao.getSessionDirect()
+                if (session != null && !isDemoSession(session)) {
+                    val allMoviesList = mutableListOf<Movie>()
+                    // Try to fetch all movies directly first
+                    val directMovies = IptvMockData.fetchXtreamMovies(session, null)
+                    if (directMovies.isNotEmpty()) {
+                        allMoviesList.addAll(directMovies)
+                    } else {
+                        // Fallback: fetch category by category in parallel
+                        val categories = getCategories("MOVIE").firstOrNull() ?: emptyList()
+                        coroutineScope {
+                            val deferredMovies = categories.map { category ->
+                                async {
+                                    try {
+                                        IptvMockData.fetchXtreamMovies(session, category.id)
+                                    } catch (e: Exception) {
+                                        emptyList<Movie>()
+                                    }
+                                }
+                            }
+                            allMoviesList.addAll(deferredMovies.awaitAll().flatten())
+                        }
+                    }
+                    cachedAllMovies = allMoviesList.distinctBy { it.id }
+                } else {
+                    cachedAllMovies = IptvMockData.Movies
+                }
             }
             val movies = cachedAllMovies ?: emptyList()
             if (movies.isEmpty()) return@withContext null
             
             val cleanTrending = normalizeTitle(title)
-            if (cleanTrending.isEmpty()) return@withContext null
+            val alphaTrending = toAlphanumeric(title)
+            if (cleanTrending.isEmpty() && alphaTrending.isEmpty()) return@withContext null
             
             var bestMatch: Movie? = null
             var bestScore = 0
             
             for (movie in movies) {
                 val cleanProvider = normalizeTitle(movie.title)
-                if (cleanProvider.isEmpty()) continue
+                val alphaProvider = toAlphanumeric(movie.title)
+                if (cleanProvider.isEmpty() && alphaProvider.isEmpty()) continue
                 
                 var score = 0
-                if (cleanTrending == cleanProvider) {
-                    score = 3
+                if (alphaTrending == alphaProvider) {
+                    score = 10
+                } else if (cleanTrending == cleanProvider) {
+                    score = 9
+                } else if (alphaProvider.contains(alphaTrending) || alphaTrending.contains(alphaProvider)) {
+                    score = 8
                 } else if (cleanProvider.contains(cleanTrending) || cleanTrending.contains(cleanProvider)) {
-                    score = 2
+                    score = 7
                 } else {
                     // Word overlap
                     val trendingWords = cleanTrending.split(" ").filter { it.length > 2 && it !in listOf("the", "and", "for", "with") }
-                    if (trendingWords.isNotEmpty() && trendingWords.all { cleanProvider.contains(it) }) {
-                        score = 1
+                    if (trendingWords.isNotEmpty()) {
+                        val matchingWordsCount = trendingWords.count { cleanProvider.contains(it) }
+                        if (matchingWordsCount == trendingWords.size) {
+                            score = 6
+                        } else if (matchingWordsCount >= (trendingWords.size + 1) / 2) {
+                            score = 5
+                        }
                     }
                 }
                 
                 if (score > bestScore) {
                     bestScore = score
                     bestMatch = movie
-                    if (bestScore == 3) break // Exact match found, we can stop
+                    if (bestScore == 10) break // Exact match, stop
                 }
             }
             
@@ -513,39 +557,76 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
 
     suspend fun findMatchingSeries(title: String): Series? = withContext(Dispatchers.IO) {
         try {
-            if (cachedAllSeries == null) {
-                cachedAllSeries = getSeries(null).firstOrNull() ?: emptyList()
+            if (cachedAllSeries.isNullOrEmpty()) {
+                val session = dao.getSessionDirect()
+                if (session != null && !isDemoSession(session)) {
+                    val allSeriesList = mutableListOf<Series>()
+                    // Try to fetch all series directly first
+                    val directSeries = IptvMockData.fetchXtreamSeries(session, null)
+                    if (directSeries.isNotEmpty()) {
+                        allSeriesList.addAll(directSeries)
+                    } else {
+                        // Fallback: fetch category by category in parallel
+                        val categories = getCategories("SERIES").firstOrNull() ?: emptyList()
+                        coroutineScope {
+                            val deferredSeries = categories.map { category ->
+                                async {
+                                    try {
+                                        IptvMockData.fetchXtreamSeries(session, category.id)
+                                    } catch (e: Exception) {
+                                        emptyList<Series>()
+                                    }
+                                }
+                            }
+                            allSeriesList.addAll(deferredSeries.awaitAll().flatten())
+                        }
+                    }
+                    cachedAllSeries = allSeriesList.distinctBy { it.id }
+                } else {
+                    cachedAllSeries = IptvMockData.SeriesList
+                }
             }
             val seriesList = cachedAllSeries ?: emptyList()
             if (seriesList.isEmpty()) return@withContext null
             
             val cleanTrending = normalizeTitle(title)
-            if (cleanTrending.isEmpty()) return@withContext null
+            val alphaTrending = toAlphanumeric(title)
+            if (cleanTrending.isEmpty() && alphaTrending.isEmpty()) return@withContext null
             
             var bestMatch: Series? = null
             var bestScore = 0
             
             for (series in seriesList) {
                 val cleanProvider = normalizeTitle(series.title)
-                if (cleanProvider.isEmpty()) continue
+                val alphaProvider = toAlphanumeric(series.title)
+                if (cleanProvider.isEmpty() && alphaProvider.isEmpty()) continue
                 
                 var score = 0
-                if (cleanTrending == cleanProvider) {
-                    score = 3
+                if (alphaTrending == alphaProvider) {
+                    score = 10
+                } else if (cleanTrending == cleanProvider) {
+                    score = 9
+                } else if (alphaProvider.contains(alphaTrending) || alphaTrending.contains(alphaProvider)) {
+                    score = 8
                 } else if (cleanProvider.contains(cleanTrending) || cleanTrending.contains(cleanProvider)) {
-                    score = 2
+                    score = 7
                 } else {
                     // Word overlap
                     val trendingWords = cleanTrending.split(" ").filter { it.length > 2 && it !in listOf("the", "and", "for", "with") }
-                    if (trendingWords.isNotEmpty() && trendingWords.all { cleanProvider.contains(it) }) {
-                        score = 1
+                    if (trendingWords.isNotEmpty()) {
+                        val matchingWordsCount = trendingWords.count { cleanProvider.contains(it) }
+                        if (matchingWordsCount == trendingWords.size) {
+                            score = 6
+                        } else if (matchingWordsCount >= (trendingWords.size + 1) / 2) {
+                            score = 5
+                        }
                     }
                 }
                 
                 if (score > bestScore) {
                     bestScore = score
                     bestMatch = series
-                    if (bestScore == 3) break // Exact match found, we can stop
+                    if (bestScore == 10) break // Exact match, stop
                 }
             }
             

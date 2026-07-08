@@ -189,14 +189,31 @@ fun HomeScreen(
                         homeUiState = homeUiState,
                         onTmdbItemClick = { item ->
                             coroutineScope.launch {
+                                val itemTitle = item.title ?: "Untitled"
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Searching IPTV provider for \"$itemTitle\"...",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                                
                                 if (item.mediaType == "tv") {
-                                    val matched = repository.findMatchingSeries(item.title ?: "")
+                                    val matched = repository.findMatchingSeries(itemTitle)
                                     if (matched != null) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Matched: \"${matched.title}\"",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                         activeSeriesDetail = matched
                                     } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Not found on provider. Showing details.",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                         val dynamicSeries = Series(
                                             id = "dynamic_series_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
-                                            title = item.title ?: "Untitled Series",
+                                            title = itemTitle,
                                             posterUrl = item.posterUrl ?: "",
                                             backdropUrl = item.backdropUrl ?: "",
                                             categoryId = "trending",
@@ -209,13 +226,23 @@ fun HomeScreen(
                                         activeSeriesDetail = dynamicSeries
                                     }
                                 } else {
-                                    val matched = repository.findMatchingMovie(item.title ?: "")
+                                    val matched = repository.findMatchingMovie(itemTitle)
                                     if (matched != null) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Matched: Playing \"${matched.title}\"...",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                         onPlayMovie(matched)
                                     } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "Not found on provider. Playing backup stream...",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                         val dynamicMovie = Movie(
                                             id = "dynamic_movie_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
-                                            title = item.title ?: "Untitled Movie",
+                                            title = itemTitle,
                                             streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
                                             posterUrl = item.posterUrl ?: "",
                                             backdropUrl = item.backdropUrl ?: "",

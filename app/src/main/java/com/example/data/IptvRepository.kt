@@ -11,6 +11,14 @@ import kotlinx.coroutines.withContext
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
+    private var cachedAllMovies: List<Movie>? = null
+    private var cachedAllSeries: List<Series>? = null
+
+    fun clearCache() {
+        cachedAllMovies = null
+        cachedAllSeries = null
+    }
+
     private fun isDemoSession(session: SessionEntity): Boolean {
         return session.username == "demo_user" || session.username == "demo" || session.serverUrl.contains("demo") || session.serverUrl.isBlank()
     }
@@ -20,6 +28,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     val activeSession: Flow<SessionEntity?> = dao.getSessionFlow()
 
     suspend fun login(username: String, token: String, serverUrl: String): Result<SessionEntity> = withContext(Dispatchers.IO) {
+        clearCache()
         if (username.isBlank() || token.isBlank() || serverUrl.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("All login fields must be filled"))
         }
@@ -114,6 +123,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
 
     suspend fun logout() {
         dao.clearSession()
+        clearCache()
     }
 
     // --- Core Content Fetching (Categories, Live, Movies, Series) ---
@@ -429,20 +439,119 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         }
     }
 
+    private fun normalizeTitle(title: String): String {
+        var clean = title.lowercase()
+        
+        // Remove common year patterns like (2024), [2024], 2024
+        clean = clean.replace(Regex("\\b(19|20)\\d{2}\\b"), "")
+        
+        // Remove specific junk strings/resolutions/quality tags
+        val junkPatterns = listOf(
+            "1080p", "720p", "4k", "uhd", "fhd", "hd", "sd", "3d", "hevc", "h264", "x264", "h265", "x265",
+            "bluray", "web-dl", "webdl", "bdrip", "brrip", "dvdrip", "scr", "camrip", "cam",
+            "dual audio", "multi-audio", "multi-subs", "multisubs", "multi", "dubbed", "subbed",
+            "latino", "castellano", "español", "spanish", "english", "french", "german", "italian", "ita", "eng",
+            "aac", "dts", "dd5.1", "ac3", "atmos"
+        )
+        for (pattern in junkPatterns) {
+            clean = clean.replace(Regex("\\b$pattern\\b"), "")
+        }
+        
+        // Remove punctuation and special characters, keep only letters, numbers, and spaces
+        clean = clean.replace(Regex("[^a-z0-9\\s]"), "")
+        
+        // Collapse multiple spaces to a single space
+        clean = clean.replace(Regex("\\s+"), " ")
+        
+        return clean.trim()
+    }
+
     suspend fun findMatchingMovie(title: String): Movie? = withContext(Dispatchers.IO) {
         try {
-            val movies = getMovies(null).firstOrNull() ?: emptyList()
-            movies.firstOrNull { it.title.equals(title, ignoreCase = true) }
+            if (cachedAllMovies == null) {
+                cachedAllMovies = getMovies(null).firstOrNull() ?: emptyList()
+            }
+            val movies = cachedAllMovies ?: emptyList()
+            if (movies.isEmpty()) return@withContext null
+            
+            val cleanTrending = normalizeTitle(title)
+            if (cleanTrending.isEmpty()) return@withContext null
+            
+            var bestMatch: Movie? = null
+            var bestScore = 0
+            
+            for (movie in movies) {
+                val cleanProvider = normalizeTitle(movie.title)
+                if (cleanProvider.isEmpty()) continue
+                
+                var score = 0
+                if (cleanTrending == cleanProvider) {
+                    score = 3
+                } else if (cleanProvider.contains(cleanTrending) || cleanTrending.contains(cleanProvider)) {
+                    score = 2
+                } else {
+                    // Word overlap
+                    val trendingWords = cleanTrending.split(" ").filter { it.length > 2 && it !in listOf("the", "and", "for", "with") }
+                    if (trendingWords.isNotEmpty() && trendingWords.all { cleanProvider.contains(it) }) {
+                        score = 1
+                    }
+                }
+                
+                if (score > bestScore) {
+                    bestScore = score
+                    bestMatch = movie
+                    if (bestScore == 3) break // Exact match found, we can stop
+                }
+            }
+            
+            bestMatch
         } catch (e: Exception) {
+            e.printStackTrace()
             null
         }
     }
 
     suspend fun findMatchingSeries(title: String): Series? = withContext(Dispatchers.IO) {
         try {
-            val seriesList = getSeries(null).firstOrNull() ?: emptyList()
-            seriesList.firstOrNull { it.title.equals(title, ignoreCase = true) }
+            if (cachedAllSeries == null) {
+                cachedAllSeries = getSeries(null).firstOrNull() ?: emptyList()
+            }
+            val seriesList = cachedAllSeries ?: emptyList()
+            if (seriesList.isEmpty()) return@withContext null
+            
+            val cleanTrending = normalizeTitle(title)
+            if (cleanTrending.isEmpty()) return@withContext null
+            
+            var bestMatch: Series? = null
+            var bestScore = 0
+            
+            for (series in seriesList) {
+                val cleanProvider = normalizeTitle(series.title)
+                if (cleanProvider.isEmpty()) continue
+                
+                var score = 0
+                if (cleanTrending == cleanProvider) {
+                    score = 3
+                } else if (cleanProvider.contains(cleanTrending) || cleanTrending.contains(cleanProvider)) {
+                    score = 2
+                } else {
+                    // Word overlap
+                    val trendingWords = cleanTrending.split(" ").filter { it.length > 2 && it !in listOf("the", "and", "for", "with") }
+                    if (trendingWords.isNotEmpty() && trendingWords.all { cleanProvider.contains(it) }) {
+                        score = 1
+                    }
+                }
+                
+                if (score > bestScore) {
+                    bestScore = score
+                    bestMatch = series
+                    if (bestScore == 3) break // Exact match found, we can stop
+                }
+            }
+            
+            bestMatch
         } catch (e: Exception) {
+            e.printStackTrace()
             null
         }
     }

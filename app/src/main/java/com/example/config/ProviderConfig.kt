@@ -11,8 +11,15 @@ data class ProviderProfile(
     val support: SupportConfig,
     val layoutMode: LayoutMode = LayoutMode.PREMIUM_STREAMING,
     val backendBaseUrl: String = "https://iptv-trending-backend.onrender.com",
-    val providerId: String = "provider_001"
+    val providerId: String = "provider_001",
+    val footballWatchChannelMatcher: FootballWatchChannelMatcherMode = FootballWatchChannelMatcherMode.BEIN_ONLY
 )
+
+enum class FootballWatchChannelMatcherMode {
+    BEIN_ONLY,
+    ALL_SPORTS,
+    ALL_CHANNELS
+}
 
 enum class LayoutMode {
     SIMPLE,

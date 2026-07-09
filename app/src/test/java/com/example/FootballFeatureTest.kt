@@ -308,4 +308,148 @@ class FootballFeatureTest {
         prefs.selectedFootballTeamIds = listOf(81, 86)
         assertEquals(listOf(81, 86), prefs.selectedFootballTeamIds)
     }
+
+    @Test
+    fun testBeInChannelDetection() {
+        // beIN Sports 1 HD is detected as beIN.
+        val channel1 = LiveChannel("ch1", "beIN Sports 1 HD", "url", "logo", "cat", "CatName", "epg1", 1)
+        assertTrue(FootballChannelMatcher.isBeinChannel(channel1))
+
+        // BEIN SPORTS Premium 1 is detected as beIN.
+        val channel2 = LiveChannel("ch2", "BEIN SPORTS Premium 1", "url", "logo", "cat", "CatName", "epg2", 2)
+        assertTrue(FootballChannelMatcher.isBeinChannel(channel2))
+
+        // Arabic beIN channel name is detected as beIN.
+        val channel3 = LiveChannel("ch3", "بي ان سبورت 1", "url", "logo", "cat", "CatName", "epg3", 3)
+        assertTrue(FootballChannelMatcher.isBeinChannel(channel3))
+
+        // Sky Sports is not detected as beIN.
+        val channel4 = LiveChannel("ch4", "Sky Sports Main Event HD", "url", "logo", "cat", "CatName", "epg4", 4)
+        assertFalse(FootballChannelMatcher.isBeinChannel(channel4))
+
+        // ESPN is not detected as beIN.
+        val channel5 = LiveChannel("ch5", "ESPN US HD", "url", "logo", "cat", "CatName", "epg5", 5)
+        assertFalse(FootballChannelMatcher.isBeinChannel(channel5))
+    }
+
+    @Test
+    fun testFootballMatchingSpecificToBeIn() {
+        val match = FootballMatch(
+            matchId = 201,
+            competitionCode = "PL",
+            competitionName = "Premier League",
+            competitionEmblemUrl = "pl.png",
+            kickoffUtc = "2026-07-09T19:00:00.000Z",
+            status = "SCHEDULED",
+            matchday = 1,
+            stage = "Regular",
+            homeTeamId = 1,
+            homeTeamName = "Real Madrid",
+            homeTeamCrestUrl = "rm.png",
+            awayTeamId = 2,
+            awayTeamName = "Barcelona",
+            awayTeamCrestUrl = "barca.png",
+            homeScore = null,
+            awayScore = null
+        )
+
+        val beinChannel = LiveChannel(
+            id = "bein_ch",
+            name = "beIN Sports 1 HD",
+            streamUrl = "http://test",
+            logoUrl = "logo.png",
+            categoryId = "sports",
+            categoryName = "Sports",
+            epgId = "bein_sports_1",
+            channelNumber = 1
+        )
+
+        val skyChannel = LiveChannel(
+            id = "sky_ch",
+            name = "Sky Sports Main Event HD",
+            streamUrl = "http://test",
+            logoUrl = "logo.png",
+            categoryId = "sports",
+            categoryName = "Sports",
+            epgId = "sky_sports_1",
+            channelNumber = 2
+        )
+
+        // EPG on beIN channel
+        val beinProgram = EpgProgramEntity(
+            channelId = "bein_sports_1",
+            title = "Real Madrid vs Barcelona Live",
+            description = "El Clasico derby live match",
+            startTime = 0L,
+            endTime = 1000L
+        )
+
+        // EPG on Sky channel
+        val skyProgram = EpgProgramEntity(
+            channelId = "sky_sports_1",
+            title = "Real Madrid vs Barcelona Live",
+            description = "El Clasico derby live match",
+            startTime = 0L,
+            endTime = 1000L
+        )
+
+        // 1. Football match with matching EPG on beIN channel returns STRONG and matchedChannel.
+        val beinOnlyChannels = listOf(beinChannel)
+        val resultBeIn = FootballMatchUtils.matchMatchWithEpg(match, listOf(beinProgram), beinOnlyChannels)
+        assertEquals("STRONG", resultBeIn.confidence)
+        assertEquals("beIN Sports 1 HD", resultBeIn.matchedChannel?.name)
+
+        // 2. Football match with matching EPG on non-beIN channel returns NONE when filtered.
+        val resultSky = FootballMatchUtils.matchMatchWithEpg(match, listOf(skyProgram), beinOnlyChannels)
+        assertEquals("NONE", resultSky.confidence)
+        assertNull(resultSky.matchedChannel)
+
+        // 3. If both beIN and non-beIN have matching EPG, and we apply the beIN filter, beIN is chosen.
+        val epgProgramsInDb = listOf(skyProgram, beinProgram)
+        // Under BEIN_ONLY mode, we only load EPG programs for the beIN channel IDs
+        val filteredEpg = epgProgramsInDb.filter { it.channelId == "bein_sports_1" }
+        val resultBoth = FootballMatchUtils.matchMatchWithEpg(match, filteredEpg, beinOnlyChannels)
+        assertEquals("STRONG", resultBoth.confidence)
+        assertEquals("beIN Sports 1 HD", resultBoth.matchedChannel?.name)
+
+        // 4. If there are no beIN channels, football matches still appear but Watch button is hidden (confidence = NONE).
+        val resultNoBeIn = FootballMatchUtils.matchMatchWithEpg(match, listOf(beinProgram), emptyList())
+        assertEquals("NONE", resultNoBeIn.confidence)
+        assertNull(resultNoBeIn.matchedChannel)
+    }
+
+    @Test
+    fun testDaoGetEpgProgramsInWindowForChannels() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+
+        try {
+            val prog1 = EpgProgramEntity(
+                channelId = "bein_sports_1",
+                title = "Match 1",
+                description = "Desc 1",
+                startTime = 1000L,
+                endTime = 2000L
+            )
+            val prog2 = EpgProgramEntity(
+                channelId = "sky_sports_1",
+                title = "Match 2",
+                description = "Desc 2",
+                startTime = 1000L,
+                endTime = 2000L
+            )
+            dao.insertEpgPrograms(listOf(prog1, prog2))
+
+            // Query only for beIN channel ID
+            val results = dao.getEpgProgramsInWindowForChannels(500L, 2500L, listOf("bein_sports_1"))
+            assertEquals(1, results.size)
+            assertEquals("bein_sports_1", results[0].channelId)
+            assertEquals("Match 1", results[0].title)
+        } finally {
+            database.close()
+        }
+    }
 }

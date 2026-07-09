@@ -272,6 +272,18 @@ interface IptvDao {
     @Query("SELECT * FROM epg_programs WHERE endTime >= :fromTime AND startTime <= :toTime")
     suspend fun getEpgProgramsInWindow(fromTime: Long, toTime: Long): List<EpgProgramEntity>
 
+    @Query("""
+        SELECT * FROM epg_programs
+        WHERE channelId IN (:channelIds)
+        AND endTime >= :fromTime
+        AND startTime <= :toTime
+    """)
+    suspend fun getEpgProgramsInWindowForChannels(
+        fromTime: Long,
+        toTime: Long,
+        channelIds: List<String>
+    ): List<EpgProgramEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEpgPrograms(programs: List<EpgProgramEntity>)
 

@@ -820,18 +820,46 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 emptyList()
             }
 
+            val matcherMode = com.example.config.ProviderConfigRegistry.currentProfile.footballWatchChannelMatcher
+            
+            val filteredChannels = if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
+                channels.filter { FootballChannelMatcher.isBeinChannel(it) }
+            } else {
+                channels
+            }
+
+            if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY && filteredChannels.isEmpty()) {
+                return@withContext matches.map { FootballWatchMatch(it, null, null, "NONE") }
+            }
+
+            val filteredEpgChannelIds = if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
+                filteredChannels.flatMap { listOf(it.epgId, it.id) }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+            } else {
+                emptyList()
+            }
+
             matches.map { match ->
                 val kickoffMillis = FootballMatchUtils.parseUtcToMillis(match.kickoffUtc)
                 val fromTime = kickoffMillis - (2 * 3600 * 1000) // kickoff - 2 hours
                 val toTime = kickoffMillis + (3 * 3600 * 1000)   // kickoff + 3 hours
                 
                 val epgInWindow = if (kickoffMillis > 0) {
-                    dao.getEpgProgramsInWindow(fromTime, toTime)
+                    if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
+                        if (filteredEpgChannelIds.isNotEmpty()) {
+                            dao.getEpgProgramsInWindowForChannels(fromTime, toTime, filteredEpgChannelIds)
+                        } else {
+                            emptyList()
+                        }
+                    } else {
+                        dao.getEpgProgramsInWindow(fromTime, toTime)
+                    }
                 } else {
                     emptyList()
                 }
 
-                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, channels)
+                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, filteredChannels)
             }
         } catch (e: Exception) {
             android.util.Log.e("IptvRepository", "Failed to fetch football schedule", e)

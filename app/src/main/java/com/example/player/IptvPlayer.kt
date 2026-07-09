@@ -199,6 +199,7 @@ fun IptvPlayer(
                 PlayerView(ctx).apply {
                     useController = false
                     this.player = exoPlayer
+                    keepScreenOn = true
                     resizeMode = when (scaleMode) {
                         PlayerScaleMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
                         PlayerScaleMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM

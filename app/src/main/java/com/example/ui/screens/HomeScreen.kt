@@ -134,6 +134,7 @@ fun HomeScreen(
     var searchQuery by remember { mutableStateOf("") }
     var searchResult by remember { mutableStateOf(SearchResults()) }
     var activeSeriesDetail by remember { mutableStateOf<Series?>(null) }
+    var unavailableTmdbItem by remember { mutableStateOf<HomeItem?>(null) }
 
     // Initialize content flows
     LaunchedEffect(profile, activeTab, selectedCategoryLive, selectedCategoryMovie, selectedCategorySeries) {
@@ -230,63 +231,47 @@ fun HomeScreen(
                                 
                                 if (item.mediaType == "tv") {
                                     val matched = repository.findMatchingSeries(itemTitle)
-                                    if (matched != null) {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "Matched: \"${matched.title}\"",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
-                                        activeSeriesDetail = matched
-                                    } else {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "Not found on provider. Showing details.",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
-                                        val dynamicSeries = Series(
-                                            id = "dynamic_series_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
-                                            title = itemTitle,
-                                            posterUrl = item.posterUrl ?: "",
-                                            backdropUrl = item.backdropUrl ?: "",
-                                            categoryId = "trending",
-                                            categoryName = "Trending",
-                                            description = item.overview ?: "No description available.",
-                                            year = item.firstAirDate?.take(4) ?: "2024",
-                                            genre = "Trending TV",
-                                            rating = String.format(java.util.Locale.US, "%.1f", item.voteAverage ?: 0.0)
-                                        )
-                                        activeSeriesDetail = dynamicSeries
+                                    val decision = TmdbClickDecisionProcessor.processClick(item, null, matched)
+                                    when (decision) {
+                                        is TmdbClickDecisionProcessor.TmdbClickResult.OpenSeries -> {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Matched: \"${decision.series.title}\"",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            activeSeriesDetail = decision.series
+                                        }
+                                        is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Not available in your provider library.",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            unavailableTmdbItem = decision.item
+                                        }
+                                        else -> {}
                                     }
                                 } else {
                                     val matched = repository.findMatchingMovie(itemTitle)
-                                    if (matched != null) {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "Matched: Playing \"${matched.title}\"...",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
-                                        onPlayMovie(matched)
-                                    } else {
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "Not found on provider. Playing backup stream...",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
-                                        val dynamicMovie = Movie(
-                                            id = "dynamic_movie_${item.tmdbId ?: java.util.UUID.randomUUID().toString()}",
-                                            title = itemTitle,
-                                            streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-                                            posterUrl = item.posterUrl ?: "",
-                                            backdropUrl = item.backdropUrl ?: "",
-                                            categoryId = "trending",
-                                            categoryName = "Trending",
-                                            description = item.overview ?: "No description available.",
-                                            year = item.releaseDate?.take(4) ?: "2024",
-                                            duration = "2h 00m",
-                                            genre = "Trending Movie",
-                                            rating = String.format(java.util.Locale.US, "%.1f", item.voteAverage ?: 0.0)
-                                        )
-                                        onPlayMovie(dynamicMovie)
+                                    val decision = TmdbClickDecisionProcessor.processClick(item, matched, null)
+                                    when (decision) {
+                                        is TmdbClickDecisionProcessor.TmdbClickResult.PlayMovie -> {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Matched: Playing \"${decision.movie.title}\"...",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            onPlayMovie(decision.movie)
+                                        }
+                                        is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Not available in your provider library.",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                            unavailableTmdbItem = decision.item
+                                        }
+                                        else -> {}
                                     }
                                 }
                             }
@@ -378,6 +363,14 @@ fun HomeScreen(
             profile = profile,
             onPlayEpisode = onPlayEpisode,
             onDismiss = { activeSeriesDetail = null }
+        )
+    }
+
+    unavailableTmdbItem?.let { item ->
+        UnavailableTmdbItemDialog(
+            item = item,
+            profile = profile,
+            onDismiss = { unavailableTmdbItem = null }
         )
     }
 
@@ -2947,6 +2940,170 @@ fun FootballConfigDialog(
         },
         containerColor = Color(profile.branding.surfaceColor)
     )
+}
+
+@Composable
+fun UnavailableTmdbItemDialog(
+    item: HomeItem,
+    profile: com.example.config.ProviderProfile,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color(0xFF334155).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Header Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Title Info",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Poster & Details Side-by-Side or Column
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Poster
+                    if (!item.posterUrl.isNullOrEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .width(100.dp)
+                                .height(150.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.DarkGray)
+                        ) {
+                            AsyncImage(
+                                model = item.posterUrl,
+                                contentDescription = item.title,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    // Metadata
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = item.title ?: "Untitled",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        val year = (item.releaseDate ?: item.firstAirDate)?.take(4) ?: "Unknown Year"
+                        Text(
+                            text = "Year: $year",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Gray
+                        )
+
+                        if (item.voteAverage != null && item.voteAverage > 0.0) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = "Rating",
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = String.format(java.util.Locale.US, "%.1f", item.voteAverage),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        val type = if (item.mediaType == "tv") "TV Series" else "Movie"
+                        Text(
+                            text = "Type: $type",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.LightGray
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Overview
+                Text(
+                    text = item.overview ?: "No overview available.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.LightGray,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Alert Warning Banner/Message
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFF4D4D).copy(alpha = 0.1f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Not Available",
+                            tint = Color(0xFFFF4D4D)
+                        )
+                        Text(
+                            text = "This title is not available in your provider library.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFFF4D4D),
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Close Button
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Close", color = Color.White)
+                }
+            }
+        }
+    }
 }
 
 

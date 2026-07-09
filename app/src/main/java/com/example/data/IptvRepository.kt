@@ -95,31 +95,33 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         
         // When logged in, pre-seed EPG cache automatically
         val now = System.currentTimeMillis()
-        val epgEntities = mutableListOf<EpgProgramEntity>()
-        val channels = if (!isDemo) {
-            try {
-                IptvMockData.fetchXtreamLiveChannels(session, null)
-            } catch (e: Exception) {
-                emptyList()
+        if (isDemo) {
+            val epgEntities = mutableListOf<EpgProgramEntity>()
+            IptvMockData.LiveChannels.take(50).forEach { channel ->
+                val programs = IptvMockData.getEpgForChannel(channel.id, now)
+                epgEntities.addAll(programs.map {
+                    EpgProgramEntity(
+                        channelId = it.channelId,
+                        title = it.title,
+                        description = it.description,
+                        startTime = it.startTime,
+                        endTime = it.endTime,
+                        epgId = it.id
+                    )
+                })
             }
+            dao.insertEpgPrograms(epgEntities)
         } else {
-            IptvMockData.LiveChannels
+            try {
+                val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
+                    .getString("stream_format", "TS") ?: "TS"
+                val channels = IptvMockData.fetchXtreamLiveChannels(session, null, format)
+                val realEpg = XmltvEpgParser.fetchAndParseXtreamXmltv(session, channels)
+                dao.insertEpgPrograms(realEpg)
+            } catch (e: Exception) {
+                android.util.Log.e("IptvRepository", "EPG fetch/parse failed for current session.")
+            }
         }
-
-        channels.take(50).forEach { channel ->
-            val programs = IptvMockData.getEpgForChannel(channel.id, now)
-            epgEntities.addAll(programs.map {
-                EpgProgramEntity(
-                    channelId = it.channelId,
-                    title = it.title,
-                    description = it.description,
-                    startTime = it.startTime,
-                    endTime = it.endTime,
-                    epgId = it.id
-                )
-            })
-        }
-        dao.insertEpgPrograms(epgEntities)
 
         return@withContext Result.success(session)
     }
@@ -383,36 +385,42 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     }
 
     suspend fun refreshEpg() = withContext(Dispatchers.IO) {
+        val session = dao.getSessionDirect() ?: return@withContext
         val now = System.currentTimeMillis()
-        val epgEntities = mutableListOf<EpgProgramEntity>()
-        val session = dao.getSessionDirect()
-        val channels = if (session != null && !isDemoSession(session)) {
+        
+        if (isDemoSession(session)) {
+            val epgEntities = mutableListOf<EpgProgramEntity>()
+            IptvMockData.LiveChannels.take(100).forEach { channel ->
+                val programs = IptvMockData.getEpgForChannel(channel.id, now)
+                epgEntities.addAll(programs.map {
+                    EpgProgramEntity(
+                        channelId = it.channelId,
+                        title = it.title,
+                        description = it.description,
+                        startTime = it.startTime,
+                        endTime = it.endTime,
+                        epgId = it.id
+                    )
+                })
+            }
+            dao.insertEpgPrograms(epgEntities)
+            dao.pruneOldEpg(now)
+        } else {
             try {
                 val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
                     .getString("stream_format", "TS") ?: "TS"
-                IptvMockData.fetchXtreamLiveChannels(session, null, format)
+                val channels = IptvMockData.fetchXtreamLiveChannels(session, null, format)
+                val realEpg = XmltvEpgParser.fetchAndParseXtreamXmltv(session, channels)
+                if (realEpg.isNotEmpty()) {
+                    dao.insertEpgPrograms(realEpg)
+                    dao.pruneOldEpg(now)
+                } else {
+                    android.util.Log.e("IptvRepository", "EPG refresh returned empty programs for current session.")
+                }
             } catch (e: Exception) {
-                emptyList()
+                android.util.Log.e("IptvRepository", "EPG refresh failed for current session.")
             }
-        } else {
-            IptvMockData.LiveChannels
         }
-        
-        channels.take(100).forEach { channel ->
-            val programs = IptvMockData.getEpgForChannel(channel.id, now)
-            epgEntities.addAll(programs.map {
-                EpgProgramEntity(
-                    channelId = it.channelId,
-                    title = it.title,
-                    description = it.description,
-                    startTime = it.startTime,
-                    endTime = it.endTime,
-                    epgId = it.id
-                )
-            })
-        }
-        dao.insertEpgPrograms(epgEntities)
-        dao.pruneOldEpg(now)
     }
 
     // --- Parental Controls Module ---
@@ -502,7 +510,8 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     }
 
     private fun normalizeTitle(title: String): String {
-        var clean = title.lowercase()
+        val temp = java.text.Normalizer.normalize(title, java.text.Normalizer.Form.NFD)
+        var clean = temp.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "").lowercase()
         
         // Remove common year patterns like (2024), [2024], 2024
         clean = clean.replace(Regex("\\b(19|20)\\d{2}\\b"), "")
@@ -607,7 +616,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 }
             }
             
-            bestMatch
+            if (bestScore >= 7) bestMatch else null
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -689,7 +698,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 }
             }
             
-            bestMatch
+            if (bestScore >= 7) bestMatch else null
         } catch (e: Exception) {
             e.printStackTrace()
             null

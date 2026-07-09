@@ -128,7 +128,7 @@ object FootballMatchUtils {
 
     fun normalize(text: String?): String {
         if (text.isNullOrBlank()) return ""
-        val temp = Normalizer.normalize(text, Normalizer.Form.NFD)
+        val temp = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
         var clean = temp.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
         clean = clean.lowercase()
         // Replace & with and
@@ -143,6 +143,65 @@ object FootballMatchUtils {
         // Collapse multiple spaces
         clean = clean.replace(Regex("\\s+"), " ").trim()
         return clean
+    }
+
+    fun getTeamVariants(normalizedName: String): List<String> {
+        val variants = mutableListOf(normalizedName)
+        when (normalizedName) {
+            "man city", "mancity" -> {
+                variants.add("manchester city")
+            }
+            "manchester city" -> {
+                variants.add("man city")
+                variants.add("mancity")
+            }
+            "man united", "manutd", "man utd" -> {
+                variants.add("manchester united")
+            }
+            "manchester united" -> {
+                variants.add("man united")
+                variants.add("man utd")
+                variants.add("manutd")
+            }
+            "inter" -> {
+                variants.add("internazionale")
+                variants.add("inter milan")
+            }
+            "internazionale", "inter milan" -> {
+                variants.add("inter")
+            }
+            "psg" -> {
+                variants.add("paris saint germain")
+                variants.add("paris saintgermain")
+            }
+            "paris saint germain", "paris saintgermain" -> {
+                variants.add("psg")
+            }
+            "bayern" -> {
+                variants.add("bayern munich")
+                variants.add("bayern munchen")
+            }
+            "bayern munich", "bayern munchen" -> {
+                variants.add("bayern")
+            }
+            "real madrid" -> {
+                variants.add("real madrid cf")
+                variants.add("real")
+            }
+            "barcelona" -> {
+                variants.add("fc barcelona")
+                variants.add("barca")
+            }
+            "barca" -> {
+                variants.add("barcelona")
+            }
+        }
+        return variants.distinct()
+    }
+
+    fun containsTeam(text: String, teamNormalized: String): Boolean {
+        val variants = getTeamVariants(teamNormalized)
+        return variants.any { variant -> text.contains(variant) }
     }
 
     fun matchMatchWithEpg(
@@ -165,19 +224,21 @@ object FootballMatchUtils {
             val titleNorm = normalize(prog.title)
             val descNorm = normalize(prog.description)
 
-            // Strong match: EPG title/description contains both home team and away team.
-            val strongTitle = titleNorm.contains(homeNormalized) && titleNorm.contains(awayNormalized)
-            val strongDesc = descNorm.contains(homeNormalized) && descNorm.contains(awayNormalized)
+            // Strong match: EPG title/description contains both home team and away team (and supporting aliases)
+            val hasHome = containsTeam(titleNorm, homeNormalized) || containsTeam(descNorm, homeNormalized)
+            val hasAway = containsTeam(titleNorm, awayNormalized) || containsTeam(descNorm, awayNormalized)
+            val strongTitle = containsTeam(titleNorm, homeNormalized) && containsTeam(titleNorm, awayNormalized)
+            val strongDesc = containsTeam(descNorm, homeNormalized) && containsTeam(descNorm, awayNormalized)
+            val strongCross = (containsTeam(titleNorm, homeNormalized) && containsTeam(descNorm, awayNormalized)) ||
+                              (containsTeam(descNorm, homeNormalized) && containsTeam(titleNorm, awayNormalized))
 
-            if (strongTitle || strongDesc) {
+            if (strongTitle || strongDesc || strongCross) {
                 bestProgram = prog
                 bestConfidence = "STRONG"
                 break // Strongest possible match, stop search
             }
 
-            // Medium match: EPG title/description contains one team and competition name.
-            val hasHome = titleNorm.contains(homeNormalized) || descNorm.contains(homeNormalized)
-            val hasAway = titleNorm.contains(awayNormalized) || descNorm.contains(awayNormalized)
+            // Medium match: EPG title/description contains one team and competition name
             val hasComp = (compNormalized.isNotEmpty() && (titleNorm.contains(compNormalized) || descNorm.contains(compNormalized)))
 
             if ((hasHome || hasAway) && hasComp) {
@@ -189,7 +250,13 @@ object FootballMatchUtils {
         }
 
         val matchedChannel = if (bestProgram != null) {
-            channels.find { it.id == bestProgram.channelId }
+            val progChannelIdNorm = normalize(bestProgram.channelId)
+            channels.find { channel ->
+                channel.epgId.equals(bestProgram.channelId, ignoreCase = true) ||
+                channel.id.equals(bestProgram.channelId, ignoreCase = true) ||
+                normalize(channel.epgId) == progChannelIdNorm ||
+                normalize(channel.id) == progChannelIdNorm
+            }
         } else {
             null
         }

@@ -72,4 +72,92 @@ object FootballChannelMatcher {
                isSportsChannelName(channel.id) ||
                channel.categoryName?.lowercase()?.contains("sport") == true
     }
+
+    fun extractBeinChannelNumber(value: String?): String? {
+        if (value == null) return null
+        val normalized = normalizeChannelName(value)
+        val regex = Regex("\\b\\d+\\b")
+        return regex.find(normalized)?.value
+    }
+
+    fun isBeinMaxChannel(value: String?): Boolean {
+        if (value == null) return false
+        val normalized = normalizeChannelName(value)
+        return normalized.contains("max")
+    }
+
+    fun isBein4kChannel(value: String?): Boolean {
+        if (value == null) return false
+        val normalized = normalizeChannelName(value)
+        return normalized.contains("4k")
+    }
+
+    fun findLocalBeinChannelForGuideEvent(
+        eventChannelName: String?,
+        eventChannelNumber: String?,
+        localChannels: List<LiveChannel>
+    ): LiveChannel? {
+        if (!isBeinChannelName(eventChannelName)) return null
+
+        val beinLocalChannels = localChannels.filter { isBeinChannel(it) }
+        if (beinLocalChannels.isEmpty()) return null
+
+        val eventNorm = normalizeChannelName(eventChannelName)
+        val eventNum = eventChannelNumber ?: extractBeinChannelNumber(eventChannelName)
+        val eventIsMax = isBeinMaxChannel(eventChannelName)
+        val eventIs4k = isBein4kChannel(eventChannelName)
+
+        // Priority 1: Exact normalized channel name match
+        val normNameMatch = beinLocalChannels.find { ch ->
+            normalizeChannelName(ch.name) == eventNorm ||
+            normalizeChannelName(ch.epgId) == eventNorm ||
+            normalizeChannelName(ch.id) == eventNorm
+        }
+        if (normNameMatch != null) return normNameMatch
+
+        // Priority 2: Exact beIN channel number match
+        if (!eventNum.isNullOrBlank()) {
+            val numberMatch = beinLocalChannels.find { ch ->
+                val chNum = extractBeinChannelNumber(ch.name) ?: extractBeinChannelNumber(ch.epgId) ?: extractBeinChannelNumber(ch.id)
+                val chIsMax = isBeinMaxChannel(ch.name) || isBeinMaxChannel(ch.epgId) || isBeinMaxChannel(ch.id)
+                val chIs4k = isBein4kChannel(ch.name) || isBein4kChannel(ch.epgId) || isBein4kChannel(ch.id)
+                
+                chNum == eventNum && chIsMax == eventIsMax && chIs4k == eventIs4k
+            }
+            if (numberMatch != null) return numberMatch
+        }
+
+        // Priority 3: Max channel match
+        if (eventIsMax) {
+            val maxMatch = beinLocalChannels.find { ch ->
+                val chIsMax = isBeinMaxChannel(ch.name) || isBeinMaxChannel(ch.epgId) || isBeinMaxChannel(ch.id)
+                chIsMax && (eventNum == null || (extractBeinChannelNumber(ch.name) == eventNum))
+            }
+            if (maxMatch != null) return maxMatch
+        }
+
+        // Priority 4: 4K channel match
+        if (eventIs4k) {
+            val match4k = beinLocalChannels.find { ch ->
+                isBein4kChannel(ch.name) || isBein4kChannel(ch.epgId) || isBein4kChannel(ch.id)
+            }
+            if (match4k != null) return match4k
+        }
+
+        // Priority 5: Safe contains match
+        val containsMatch = beinLocalChannels.find { ch ->
+            val chNorm = normalizeChannelName(ch.name)
+            val chIsMax = isBeinMaxChannel(ch.name) || isBeinMaxChannel(ch.epgId) || isBeinMaxChannel(ch.id)
+            val chIs4k = isBein4kChannel(ch.name) || isBein4kChannel(ch.epgId) || isBein4kChannel(ch.id)
+            val chNum = extractBeinChannelNumber(ch.name) ?: extractBeinChannelNumber(ch.epgId) ?: extractBeinChannelNumber(ch.id)
+            
+            val matchesCategory = (chIsMax == eventIsMax) && (chIs4k == eventIs4k)
+            val matchesNumber = (chNum == eventNum)
+            
+            matchesCategory && matchesNumber && (chNorm.contains(eventNorm) || eventNorm.contains(chNorm))
+        }
+        if (containsMatch != null) return containsMatch
+
+        return null
+    }
 }

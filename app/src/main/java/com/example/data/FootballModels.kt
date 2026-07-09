@@ -272,6 +272,77 @@ object FootballMatchUtils {
 
 // --- 4. API Client ---
 
+@JsonClass(generateAdapter = true)
+data class BeinFootballScheduleResponse(
+    @Json(name = "providerId") val providerId: String?,
+    @Json(name = "enabled") val enabled: Boolean?,
+    @Json(name = "source") val source: String?,
+    @Json(name = "country") val country: String?,
+    @Json(name = "range") val range: FootballRange?,
+    @Json(name = "matches") val matches: List<BeinFootballMatch>?
+)
+
+@JsonClass(generateAdapter = true)
+data class BeinFootballMatch(
+    @Json(name = "id") val id: String?,
+    @Json(name = "title") val title: String?,
+    @Json(name = "competitionName") val competitionName: String?,
+    @Json(name = "kickoffUtc") val kickoffUtc: String?,
+    @Json(name = "endUtc") val endUtc: String?,
+    @Json(name = "status") val status: String?,
+    @Json(name = "channelName") val channelName: String?,
+    @Json(name = "channelNumber") val channelNumber: String?
+)
+
+fun extractHomeTeamFromTitle(title: String?): String? {
+    if (title == null) return null
+    val delimiters = listOf(" vs ", " VS ", " v ", " V ", " - ")
+    for (delim in delimiters) {
+        if (title.contains(delim)) {
+            val parts = title.split(delim, limit = 2)
+            if (parts.isNotEmpty()) {
+                return parts[0].trim()
+            }
+        }
+    }
+    return title.trim()
+}
+
+fun extractAwayTeamFromTitle(title: String?): String? {
+    if (title == null) return null
+    val delimiters = listOf(" vs ", " VS ", " v ", " V ", " - ")
+    for (delim in delimiters) {
+        if (title.contains(delim)) {
+            val parts = title.split(delim, limit = 2)
+            if (parts.size > 1) {
+                return parts[1].trim()
+            }
+        }
+    }
+    return null
+}
+
+fun BeinFootballMatch.toFootballMatchCompat(): FootballMatch {
+    return FootballMatch(
+        matchId = id?.hashCode() ?: title?.hashCode() ?: 0,
+        competitionCode = null,
+        competitionName = competitionName,
+        competitionEmblemUrl = null,
+        kickoffUtc = kickoffUtc,
+        status = status ?: "SCHEDULED",
+        matchday = null,
+        stage = null,
+        homeTeamId = null,
+        homeTeamName = extractHomeTeamFromTitle(title),
+        homeTeamCrestUrl = null,
+        awayTeamId = null,
+        awayTeamName = extractAwayTeamFromTitle(title),
+        awayTeamCrestUrl = null,
+        homeScore = null,
+        awayScore = null
+    )
+}
+
 interface FootballApiService {
     @GET("api/v1/football/options")
     suspend fun getFootballOptions(
@@ -284,9 +355,15 @@ interface FootballApiService {
         @Query("competition_codes") competitionCodes: String?,
         @Query("team_ids") teamIds: String?
     ): FootballScheduleResponse
+
+    @GET("api/v1/football/bein-schedule")
+    suspend fun getBeinFootballSchedule(
+        @Query("provider_id") providerId: String,
+        @Query("country") country: String
+    ): BeinFootballScheduleResponse
 }
 
-open class FootballApiClient(private val baseUrl: String = "https://iptv-football-backendn.onrender.com") {
+open class FootballApiClient(private val baseUrl: String) {
     private val retrofit = Retrofit.Builder()
         .baseUrl(baseUrl.removeSuffix("/") + "/")
         .addConverterFactory(MoshiConverterFactory.create())
@@ -304,5 +381,12 @@ open class FootballApiClient(private val baseUrl: String = "https://iptv-footbal
         teamIds: String?
     ): FootballScheduleResponse {
         return service.getFootballSchedule(providerId, competitionCodes, teamIds)
+    }
+
+    open suspend fun getBeinFootballSchedule(
+        providerId: String,
+        country: String
+    ): BeinFootballScheduleResponse {
+        return service.getBeinFootballSchedule(providerId, country)
     }
 }

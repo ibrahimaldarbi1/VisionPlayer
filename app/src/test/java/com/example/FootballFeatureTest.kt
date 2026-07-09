@@ -456,28 +456,129 @@ class FootballFeatureTest {
 
     class MockFootballApiClient(
         private val enabled: Boolean = true,
-        private val matches: List<FootballMatch> = emptyList(),
+        private val beinMatches: List<BeinFootballMatch> = emptyList(),
         private val shouldThrow: Boolean = false
-    ) : FootballApiClient() {
-        override suspend fun getFootballSchedule(
+    ) : FootballApiClient("https://mock-url.com") {
+        override suspend fun getBeinFootballSchedule(
             providerId: String,
-            competitionCodes: String?,
-            teamIds: String?
-        ): FootballScheduleResponse {
+            country: String
+        ): BeinFootballScheduleResponse {
             if (shouldThrow) {
                 throw Exception("Simulated network failure")
             }
-            return FootballScheduleResponse(
+            return BeinFootballScheduleResponse(
                 providerId = "provider_1",
                 enabled = enabled,
+                source = "bein_guide",
+                country = country,
                 range = null,
-                matches = matches
+                matches = beinMatches
             )
         }
     }
 
     @Test
-    fun testIptvRepositoryFootballSchedule() = kotlinx.coroutines.runBlocking {
+    fun testBeinFootballMatchCompatibilityMapping() {
+        val match1 = BeinFootballMatch(
+            id = "event_1",
+            title = "Real Madrid vs Barcelona",
+            competitionName = "La Liga",
+            kickoffUtc = "2026-07-09T19:00:00.000Z",
+            endUtc = "2026-07-09T21:00:00.000Z",
+            status = "SCHEDULED",
+            channelName = "beIN SPORTS 1",
+            channelNumber = "1"
+        )
+        val compat1 = match1.toFootballMatchCompat()
+        assertEquals(match1.id.hashCode(), compat1.matchId)
+        assertEquals("La Liga", compat1.competitionName)
+        assertEquals("Real Madrid", compat1.homeTeamName)
+        assertEquals("Barcelona", compat1.awayTeamName)
+
+        val match2 = BeinFootballMatch(
+            id = null,
+            title = "Chelsea v Arsenal",
+            competitionName = "Premier League",
+            kickoffUtc = "2026-07-09T15:00:00.000Z",
+            endUtc = "2026-07-09T17:00:00.000Z",
+            status = "LIVE",
+            channelName = "beIN SPORTS 2",
+            channelNumber = "2"
+        )
+        val compat2 = match2.toFootballMatchCompat()
+        assertEquals("Chelsea", compat2.homeTeamName)
+        assertEquals("Arsenal", compat2.awayTeamName)
+        assertEquals("LIVE", compat2.status)
+
+        val match3 = BeinFootballMatch(
+            id = "event_3",
+            title = "PSG - Lyon",
+            competitionName = "Ligue 1",
+            kickoffUtc = "2026-07-09T20:00:00.000Z",
+            endUtc = "2026-07-09T22:00:00.000Z",
+            status = null,
+            channelName = "beIN SPORTS 3",
+            channelNumber = "3"
+        )
+        val compat3 = match3.toFootballMatchCompat()
+        assertEquals("PSG", compat3.homeTeamName)
+        assertEquals("Lyon", compat3.awayTeamName)
+        assertEquals("SCHEDULED", compat3.status)
+
+        val match4 = BeinFootballMatch(
+            id = "event_4",
+            title = "Juventus Club Special Presentation",
+            competitionName = "Serie A",
+            kickoffUtc = "2026-07-09T18:00:00.000Z",
+            endUtc = "2026-07-09T20:00:00.000Z",
+            status = "SCHEDULED",
+            channelName = "beIN SPORTS 4",
+            channelNumber = "4"
+        )
+        val compat4 = match4.toFootballMatchCompat()
+        assertEquals("Juventus Club Special Presentation", compat4.homeTeamName)
+        assertNull(compat4.awayTeamName)
+    }
+
+    @Test
+    fun testBeinChannelMatchingPriorityAndRules() {
+        val localChannels = listOf(
+            LiveChannel(id = "ch_bein1", name = "AR | beIN Sports 1 HD", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "bein_sports_1", channelNumber = 1),
+            LiveChannel(id = "ch_bein2", name = "BEIN SPORTS 2 FHD", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "bein_sports_2", channelNumber = 2),
+            LiveChannel(id = "ch_beinmax1", name = "beIN Sports Max 1", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "bein_max_1", channelNumber = 10),
+            LiveChannel(id = "ch_bein4k", name = "beIN 4K UHD", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "bein_4k", channelNumber = 20),
+            LiveChannel(id = "ch_sky", name = "Sky Sports 1", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "sky_sports_1", channelNumber = 100),
+            LiveChannel(id = "ch_ssc", name = "SSC 1 HD", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "ssc_1", channelNumber = 101),
+            LiveChannel(id = "ch_osn", name = "OSN Sports 1", streamUrl = "http://", logoUrl = "", categoryId = "", categoryName = "Sports", epgId = "osn_1", channelNumber = 102)
+        )
+
+        // 1. Exact or partial match with priority for regular/Max/4k types
+        val match1 = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("beIN SPORTS 1", "1", localChannels)
+        assertNotNull(match1)
+        assertEquals("ch_bein1", match1?.id)
+
+        val match2 = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("beIN SPORTS 2", "2", localChannels)
+        assertNotNull(match2)
+        assertEquals("ch_bein2", match2?.id)
+
+        val matchMax1 = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("beIN SPORTS MAX 1", "1", localChannels)
+        assertNotNull(matchMax1)
+        assertEquals("ch_beinmax1", matchMax1?.id)
+
+        val match4k = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("beIN 4K", null, localChannels)
+        assertNotNull(match4k)
+        assertEquals("ch_bein4k", match4k?.id)
+
+        // 2. Non-beIN channels should never match
+        val noMatchSky = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("Sky Sports 1", "1", localChannels)
+        assertNull(noMatchSky)
+
+        val noMatchSSC = FootballChannelMatcher.findLocalBeinChannelForGuideEvent("SSC 1", "1", localChannels)
+        assertNull(noMatchSSC)
+    }
+
+    @Test
+    fun testIptvRepositoryFootballScheduleNew() = kotlinx.coroutines.runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
             .allowMainThreadQueries()
@@ -485,47 +586,20 @@ class FootballFeatureTest {
         val dao = database.iptvDao()
         val repository = IptvRepository(dao, context)
 
-        val match1 = FootballMatch(
-            matchId = 301,
-            competitionCode = "PL",
-            competitionName = "Premier League",
-            competitionEmblemUrl = "pl.png",
-            kickoffUtc = "2026-07-09T19:00:00.000Z",
-            status = "SCHEDULED",
-            matchday = 1,
-            stage = "Regular",
-            homeTeamId = 1,
-            homeTeamName = "Real Madrid",
-            homeTeamCrestUrl = "rm.png",
-            awayTeamId = 2,
-            awayTeamName = "Barcelona",
-            awayTeamCrestUrl = "barca.png",
-            homeScore = null,
-            awayScore = null
-        )
-
-        val match2 = FootballMatch(
-            matchId = 302,
-            competitionCode = "LL",
+        val matchEvent = BeinFootballMatch(
+            id = "bein_event_1",
+            title = "Real Madrid vs Barcelona",
             competitionName = "La Liga",
-            competitionEmblemUrl = "ll.png",
-            kickoffUtc = "2026-07-09T21:00:00.000Z",
+            kickoffUtc = "2026-07-09T19:00:00.000Z",
+            endUtc = "2026-07-09T21:00:00.000Z",
             status = "SCHEDULED",
-            matchday = 1,
-            stage = "Regular",
-            homeTeamId = 3,
-            homeTeamName = "Liverpool",
-            homeTeamCrestUrl = "lfc.png",
-            awayTeamId = 4,
-            awayTeamName = "Chelsea",
-            awayTeamCrestUrl = "cfc.png",
-            homeScore = null,
-            awayScore = null
+            channelName = "beIN SPORTS 1",
+            channelNumber = "1"
         )
 
         val beinChannel = LiveChannelEntity(
-            id = "bein_ch",
-            name = "beIN Sports 1 HD",
+            id = "bein_ch1",
+            name = "AR | beIN Sports 1 HD",
             streamUrl = "http://test",
             logoUrl = "logo.png",
             categoryId = "sports",
@@ -540,86 +614,32 @@ class FootballFeatureTest {
             updatedAt = System.currentTimeMillis()
         )
 
-        val skyChannel = LiveChannelEntity(
-            id = "sky_ch",
-            name = "Sky Sports Main Event HD",
-            streamUrl = "http://test",
-            logoUrl = "logo.png",
-            categoryId = "sports",
-            categoryName = "Sports",
-            epgId = "sky_sports_1",
-            channelNumber = 2,
-            isLocked = false,
-            isAdult = false,
-            hasCatchup = false,
-            hidden = false,
-            sortOrder = 2,
-            updatedAt = System.currentTimeMillis()
-        )
-
-        val testKickoff = FootballMatchUtils.parseUtcToMillis(match1.kickoffUtc)
-        val beinProgram = EpgProgramEntity(
-            channelId = "bein_sports_1",
-            title = "Real Madrid vs Barcelona Live",
-            description = "El Clasico derby live match",
-            startTime = testKickoff - 1000000L,
-            endTime = testKickoff + 1000000L
-        )
-
         try {
-            // 1. When backend returns 2 matches and no channels exist, result size is 2 and both have confidence NONE.
-            repository.testFootballApiClient = MockFootballApiClient(matches = listOf(match1, match2))
-            val result1 = repository.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
-            assertEquals(2, result1.size)
-            assertEquals("NONE", result1[0].confidence)
-            assertEquals("NONE", result1[1].confidence)
+            // 1. Backend beIN event is displayed even when localChannels is empty (CHANNEL_NOT_FOUND confidence)
+            repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(matchEvent))
+            val result1 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            assertEquals(1, result1.size)
+            assertEquals("CHANNEL_NOT_FOUND", result1[0].confidence)
+            assertNull(result1[0].matchedChannel)
+            assertEquals("beIN SPORTS 1", result1[0].matchedProgramName)
 
-            // 2. When backend returns 2 matches and EPG query throws (simulated by a separate repository with closed DB), result size is still 2 and both have confidence NONE.
-            val closedDb = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
-                .allowMainThreadQueries()
-                .build()
-            val closedDao = closedDb.iptvDao()
-            val closedRepo = IptvRepository(closedDao, context)
-            closedRepo.testFootballApiClient = MockFootballApiClient(matches = listOf(match1, match2))
-            
-            // Insert channels first
-            closedDao.upsertLiveChannels(listOf(beinChannel))
-            // Close the DB to make query fail
-            closedDb.close()
-            
-            val result2 = closedRepo.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
-            assertEquals(2, result2.size)
-            assertEquals("NONE", result2[0].confidence)
-            assertEquals("NONE", result2[1].confidence)
+            // 2. Backend beIN event with matching local channel returns confidence "BEIN_GUIDE"
+            dao.upsertLiveChannels(listOf(beinChannel))
+            val result2 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            assertEquals(1, result2.size)
+            assertEquals("BEIN_GUIDE", result2[0].confidence)
+            assertNotNull(result2[0].matchedChannel)
+            assertEquals("bein_ch1", result2[0].matchedChannel?.id)
 
-            // 3. When backend returns 2 matches and no beIN channels exist, result size is still 2 and both have confidence NONE.
-            dao.upsertLiveChannels(listOf(skyChannel))
-            val result3 = repository.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
-            assertEquals(2, result3.size)
-            assertEquals("NONE", result3[0].confidence)
-            assertEquals("NONE", result3[1].confidence)
+            // 3. Backend return empty
+            repository.testFootballApiClient = MockFootballApiClient(beinMatches = emptyList())
+            val result3 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            assertTrue(result3.isEmpty())
 
-            // 4. When backend returns 0 matches, result is empty.
-            repository.testFootballApiClient = MockFootballApiClient(matches = emptyList())
-            val result4 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
-            assertTrue(result4.isEmpty())
-
-            // 5. When backend call fails, result is empty.
+            // 4. Backend throw exception
             repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
-            val result5 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
-            assertTrue(result5.isEmpty())
-
-            // 6. When beIN channel + matching EPG exist, result contains match with STRONG confidence and matchedChannel.
-            dao.clearLiveChannels(null)
-            dao.upsertLiveChannels(listOf(beinChannel, skyChannel))
-            dao.insertEpgPrograms(listOf(beinProgram))
-            
-            repository.testFootballApiClient = MockFootballApiClient(matches = listOf(match1))
-            val result6 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
-            assertEquals(1, result6.size)
-            assertEquals("STRONG", result6[0].confidence)
-            assertEquals("bein_ch", result6[0].matchedChannel?.id)
-            assertEquals("beIN Sports 1 HD", result6[0].matchedChannel?.name)
+            val result4 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            assertTrue(result4.isEmpty())
 
         } finally {
             database.close()

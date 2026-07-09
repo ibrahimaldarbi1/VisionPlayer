@@ -120,16 +120,12 @@ fun HomeScreen(
     }
 
     LaunchedEffect(activeTab, repository.footballPrefs.showFootballScheduleOnHome, repository.footballPrefs.selectedFootballCompetitionCodes, repository.footballPrefs.selectedFootballTeamIds) {
-        if (activeTab == "HOME" && repository.footballPrefs.showFootballScheduleOnHome) {
+        if (activeTab == "HOME" && repository.footballPrefs.showFootballScheduleOnHome && profile.features.footballScheduleEnabled) {
             val codes = repository.footballPrefs.selectedFootballCompetitionCodes
             val ids = repository.footballPrefs.selectedFootballTeamIds
-            if (codes.isNotEmpty() || ids.isNotEmpty()) {
-                isLoadingFootball = true
-                footballMatches = repository.getFootballSchedule(profile.providerId, codes, ids)
-                isLoadingFootball = false
-            } else {
-                footballMatches = emptyList()
-            }
+            isLoadingFootball = true
+            footballMatches = repository.getFootballSchedule(profile.providerId, codes, ids)
+            isLoadingFootball = false
         } else {
             footballMatches = emptyList()
         }
@@ -848,7 +844,7 @@ fun HomeDashboardView(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No football matches found for your current selection.",
+                                text = "No football matches found in the beIN guide right now.",
                                 color = Color.Gray,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -3161,6 +3157,17 @@ fun FootballMatchCard(
                                 )
                             }
                         }
+                    }
+                } else {
+                    val targetChName = watchMatch.matchedProgramName
+                    if (!targetChName.isNullOrBlank()) {
+                        Text(
+                            text = "On $targetChName",
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
                     }
                 }
             }

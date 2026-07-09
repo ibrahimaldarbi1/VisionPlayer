@@ -788,7 +788,8 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
 
     suspend fun getFootballOptions(providerId: String): FootballOptionsResponse? = withContext(Dispatchers.IO) {
         try {
-            val client = FootballApiClient()
+            val profile = com.example.config.ProviderConfigRegistry.currentProfile
+            val client = FootballApiClient(profile.footballBackendBaseUrl)
             client.getFootballOptions(providerId)
         } catch (e: Exception) {
             android.util.Log.e("IptvRepository", "Failed to fetch football options", e)
@@ -801,86 +802,54 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         selectedCompetitionCodes: List<String>,
         selectedTeamIds: List<Int>
     ): List<FootballWatchMatch> = withContext(Dispatchers.IO) {
-        if (selectedCompetitionCodes.isEmpty() && selectedTeamIds.isEmpty()) {
+        val profile = com.example.config.ProviderConfigRegistry.currentProfile
+
+        if (!profile.features.footballScheduleEnabled) {
             return@withContext emptyList()
         }
 
-        val matches: List<FootballMatch> = try {
-            val client = testFootballApiClient ?: FootballApiClient()
-            val codesParam = if (selectedCompetitionCodes.isNotEmpty()) selectedCompetitionCodes.joinToString(",") else null
-            val idsParam = if (selectedTeamIds.isNotEmpty()) selectedTeamIds.joinToString(",") else null
-            
-            val response = client.getFootballSchedule(providerId, codesParam, idsParam)
+        try {
+            val client = testFootballApiClient ?: FootballApiClient(profile.footballBackendBaseUrl)
+
+            val response = client.getBeinFootballSchedule(
+                providerId = providerId,
+                country = profile.footballScheduleCountry
+            )
+
             if (response.enabled == false) {
                 return@withContext emptyList()
             }
-            val list = response.matches.orEmpty()
-            android.util.Log.d("IptvRepository", "Football backend returned ${list.size} matches.")
-            list
-        } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to fetch football schedule from backend", e)
-            return@withContext emptyList()
-        }
 
-        if (matches.isEmpty()) {
-            return@withContext emptyList()
-        }
+            val beinMatches = response.matches.orEmpty()
 
-        // Load all available channels to match against
-        val channels = try {
-            getLiveChannels(null).firstOrNull() ?: emptyList()
-        } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to load local channels for football matching", e)
-            emptyList()
-        }
-        android.util.Log.d("IptvRepository", "Loaded ${channels.size} local channels for football matching.")
-
-        val matcherMode = com.example.config.ProviderConfigRegistry.currentProfile.footballWatchChannelMatcher
-
-        val watchCandidateChannels = when (matcherMode) {
-            com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY ->
-                channels.filter { FootballChannelMatcher.isBeinChannel(it) }
-            com.example.config.FootballWatchChannelMatcherMode.ALL_SPORTS ->
-                channels.filter { FootballChannelMatcher.isSportsChannel(it) }
-            com.example.config.FootballWatchChannelMatcherMode.ALL_CHANNELS ->
-                channels
-        }
-        android.util.Log.d("IptvRepository", "Filtered ${watchCandidateChannels.size} candidate channels for matcher mode $matcherMode.")
-
-        if (watchCandidateChannels.isEmpty()) {
-            return@withContext matches.map { match ->
-                FootballWatchMatch(match, null, null, "NONE")
+            if (beinMatches.isEmpty()) {
+                return@withContext emptyList()
             }
-        }
 
-        val watchCandidateEpgIds = watchCandidateChannels
-            .flatMap { channel -> listOf(channel.epgId, channel.id) }
-            .filter { it.isNotBlank() }
-            .distinct()
-
-        matches.map { match ->
-            try {
-                val kickoffMillis = FootballMatchUtils.parseUtcToMillis(match.kickoffUtc)
-                if (kickoffMillis <= 0L) {
-                    return@map FootballWatchMatch(match, null, null, "NONE")
-                }
-                val fromTime = kickoffMillis - (2 * 3600 * 1000) // kickoff - 2 hours
-                val toTime = kickoffMillis + (3 * 3600 * 1000)   // kickoff + 3 hours
-                
-                val epgInWindow = if (
-                    matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY &&
-                    watchCandidateEpgIds.isNotEmpty()
-                ) {
-                    dao.getEpgProgramsInWindowForChannels(fromTime, toTime, watchCandidateEpgIds)
-                } else {
-                    dao.getEpgProgramsInWindow(fromTime, toTime)
-                }
-
-                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, watchCandidateChannels)
+            val localChannels = try {
+                getLiveChannels(null).firstOrNull().orEmpty()
             } catch (e: Exception) {
-                android.util.Log.e("IptvRepository", "Football Watch matching failed for one match", e)
-                FootballWatchMatch(match, null, null, "NONE")
+                android.util.Log.e("IptvRepository", "Failed to load local channels for beIN mapping.")
+                emptyList()
             }
+
+            return@withContext beinMatches.map { beinMatch ->
+                val localChannel = FootballChannelMatcher.findLocalBeinChannelForGuideEvent(
+                    eventChannelName = beinMatch.channelName,
+                    eventChannelNumber = beinMatch.channelNumber,
+                    localChannels = localChannels
+                )
+
+                FootballWatchMatch(
+                    match = beinMatch.toFootballMatchCompat(),
+                    matchedChannel = localChannel,
+                    matchedProgramName = beinMatch.channelName,
+                    confidence = if (localChannel != null) "BEIN_GUIDE" else "CHANNEL_NOT_FOUND"
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to load beIN football schedule.", e)
+            emptyList()
         }
     }
 

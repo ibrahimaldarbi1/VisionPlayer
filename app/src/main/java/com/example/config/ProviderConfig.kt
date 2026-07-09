@@ -12,7 +12,9 @@ data class ProviderProfile(
     val layoutMode: LayoutMode = LayoutMode.PREMIUM_STREAMING,
     val backendBaseUrl: String = "https://iptv-trending-backend.onrender.com",
     val providerId: String = "provider_001",
-    val footballWatchChannelMatcher: FootballWatchChannelMatcherMode = FootballWatchChannelMatcherMode.BEIN_ONLY
+    val footballWatchChannelMatcher: FootballWatchChannelMatcherMode = FootballWatchChannelMatcherMode.BEIN_ONLY,
+    val footballBackendBaseUrl: String = "https://iptv-football-backendn.onrender.com",
+    val footballScheduleCountry: String = "jo"
 )
 
 enum class FootballWatchChannelMatcherMode {
@@ -41,7 +43,8 @@ data class FeatureConfig(
     val supportPageEnabled: Boolean = true,
     val updateCheckerEnabled: Boolean = true,
     val announcementsEnabled: Boolean = true,
-    val multiViewEnabled: Boolean = true
+    val multiViewEnabled: Boolean = true,
+    val footballScheduleEnabled: Boolean = true
 )
 
 data class BrandingConfig(

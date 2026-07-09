@@ -3,10 +3,13 @@ package com.example.player
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -14,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onKeyEvent
@@ -22,12 +26,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -38,6 +47,15 @@ import kotlinx.coroutines.launch
 enum class PlayerScaleMode {
     FIT, FILL, STRETCH
 }
+
+data class TrackInfo(
+    val groupIndex: Int,
+    val trackIndex: Int,
+    val format: Format,
+    val isSelected: Boolean,
+    val isSupported: Boolean,
+    val label: String
+)
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -55,9 +73,62 @@ fun IptvPlayer(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    
-    // ExoPlayer Instance with custom HTTP Data Source to handle redirects and IPTV user agents
-    val exoPlayer = remember {
+    val playerPrefs = remember { context.getSharedPreferences("iptv_player_prefs", android.content.Context.MODE_PRIVATE) }
+
+    // Persist and load aspect ratio
+    var scaleMode by remember {
+        mutableStateOf(
+            run {
+                val saved = playerPrefs.getString("scale_mode", PlayerScaleMode.FIT.name)
+                try {
+                    PlayerScaleMode.valueOf(saved ?: PlayerScaleMode.FIT.name)
+                } catch (e: Exception) {
+                    PlayerScaleMode.FIT
+                }
+            }
+        )
+    }
+
+    LaunchedEffect(scaleMode) {
+        playerPrefs.edit().putString("scale_mode", scaleMode.name).apply()
+    }
+
+    // Persist and load decoder preference (auto, hardware, software)
+    var decoderMode by remember {
+        mutableStateOf(
+            playerPrefs.getString("decoder_mode", "auto") ?: "auto"
+        )
+    }
+
+    LaunchedEffect(decoderMode) {
+        playerPrefs.edit().putString("decoder_mode", decoderMode).apply()
+    }
+
+    // ExoPlayer Instance with custom HTTP Data Source and Hardware/Software selection
+    val exoPlayer = remember(decoderMode) {
+        val customMediaCodecSelector = MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+            val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+            if (decoderMode == "software") {
+                decoders.sortedWith(compareBy { decoder ->
+                    val name = decoder.name.lowercase()
+                    val isSoftware = name.startsWith("c2.android.") || name.contains("google") || name.contains("sw")
+                    if (isSoftware) 0 else 1
+                })
+            } else if (decoderMode == "hardware") {
+                decoders.sortedWith(compareBy { decoder ->
+                    val name = decoder.name.lowercase()
+                    val isSoftware = name.startsWith("c2.android.") || name.contains("google") || name.contains("sw")
+                    if (isSoftware) 1 else 0
+                })
+            } else {
+                decoders
+            }
+        }
+
+        val renderersFactory = DefaultRenderersFactory(context).apply {
+            setMediaCodecSelector(customMediaCodecSelector)
+        }
+
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
@@ -66,6 +137,7 @@ fun IptvPlayer(
             .setDataSourceFactory(httpDataSourceFactory)
 
         ExoPlayer.Builder(context)
+            .setRenderersFactory(renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
                 playWhenReady = true
@@ -73,7 +145,6 @@ fun IptvPlayer(
     }
 
     var isPlaying by remember { mutableStateOf(true) }
-    var scaleMode by remember { mutableStateOf(PlayerScaleMode.FIT) }
     var playbackState by remember { mutableStateOf(Player.STATE_IDLE) }
     var playbackError by remember { mutableStateOf<String?>(null) }
     var currentPosition by remember { mutableStateOf(0L) }
@@ -81,10 +152,12 @@ fun IptvPlayer(
     
     // UI HUD Controls visibility
     var showControls by remember { mutableStateOf(true) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var selectedCategory by remember { mutableStateOf(0) } // 0: Audio, 1: Subtitles, 2: Aspect Ratio, 3: Decoder
 
     // Auto-hide controls timer
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
+    LaunchedEffect(showControls, isPlaying, showSettingsDialog) {
+        if (showControls && isPlaying && !showSettingsDialog) {
             delay(5000)
             showControls = false
         }
@@ -105,8 +178,8 @@ fun IptvPlayer(
     }
 
     // Stream URL changes
-    LaunchedEffect(streamUrl) {
-        android.util.Log.d("IptvPlayer", "Loading stream: $streamUrl")
+    LaunchedEffect(streamUrl, exoPlayer) {
+        android.util.Log.d("IptvPlayer", "Loading stream uri")
         playbackError = null
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
@@ -132,8 +205,18 @@ fun IptvPlayer(
 
             override fun onPlayerError(error: PlaybackException) {
                 playbackState = Player.STATE_IDLE
-                android.util.Log.e("IptvPlayer", "Failed to play stream: $streamUrl", error)
-                playbackError = "Playback Failed: ${error.localizedMessage ?: "Network or Stream Error"}\nURL: $streamUrl"
+                val sanitizedUrl = try {
+                    val uri = android.net.Uri.parse(streamUrl)
+                    if (uri != null) {
+                        "${uri.scheme}://${uri.host}${uri.path}"
+                    } else {
+                        "[Protected Stream]"
+                    }
+                } catch (e: Exception) {
+                    "[Protected Stream]"
+                }
+                android.util.Log.e("IptvPlayer", "Failed to play stream: $sanitizedUrl", error)
+                playbackError = "Playback Failed: ${error.localizedMessage ?: "Network or Stream Error"}\nSource: $sanitizedUrl"
             }
 
             override fun onIsPlayingChanged(isPlayingChanged: Boolean) {
@@ -147,6 +230,65 @@ fun IptvPlayer(
         }
     }
 
+    // Audio and Subtitle Tracks calculation
+    val audioTracks = remember(exoPlayer.currentTracks) {
+        val list = mutableListOf<TrackInfo>()
+        val tracks = exoPlayer.currentTracks
+        tracks.groups.forEachIndexed { groupIndex, group ->
+            if (group.type == C.TRACK_TYPE_AUDIO) {
+                for (trackIndex in 0 until group.length) {
+                    if (group.isTrackSupported(trackIndex)) {
+                        val format = group.getTrackFormat(trackIndex)
+                        list.add(
+                            TrackInfo(
+                                groupIndex = groupIndex,
+                                trackIndex = trackIndex,
+                                format = format,
+                                isSelected = group.isTrackSelected(trackIndex),
+                                isSupported = true,
+                                label = getTrackLabel(format)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        list
+    }
+
+    val subtitleTracks = remember(exoPlayer.currentTracks) {
+        val list = mutableListOf<TrackInfo>()
+        val tracks = exoPlayer.currentTracks
+        tracks.groups.forEachIndexed { groupIndex, group ->
+            if (group.type == C.TRACK_TYPE_TEXT) {
+                for (trackIndex in 0 until group.length) {
+                    if (group.isTrackSupported(trackIndex)) {
+                        val format = group.getTrackFormat(trackIndex)
+                        list.add(
+                            TrackInfo(
+                                groupIndex = groupIndex,
+                                trackIndex = trackIndex,
+                                format = format,
+                                isSelected = group.isTrackSelected(trackIndex),
+                                isSupported = true,
+                                label = getTrackLabel(format)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        list
+    }
+
+    val isAudioAutoSelected = remember(audioTracks) { audioTracks.none { it.isSelected } }
+    val isSubtitlesDisabled = remember(exoPlayer.trackSelectionParameters) {
+        exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+    }
+    val isSubAutoSelected = remember(isSubtitlesDisabled, subtitleTracks) {
+        !isSubtitlesDisabled && subtitleTracks.none { it.isSelected }
+    }
+
     // Capture physical remote D-pad keys for Android TV
     Box(
         modifier = Modifier
@@ -158,27 +300,42 @@ fun IptvPlayer(
                     showControls = true
                     when (keyEvent.nativeKeyEvent.keyCode) {
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                            true
+                            if (showSettingsDialog) {
+                                false
+                            } else {
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                true
+                            }
                         }
                         KeyEvent.KEYCODE_DPAD_LEFT -> {
-                            if (!isLive) exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0))
-                            true
+                            if (!isLive && !showSettingsDialog) {
+                                exoPlayer.seekTo((exoPlayer.currentPosition - 10000).coerceAtLeast(0))
+                                true
+                            } else false
                         }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                            if (!isLive) exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(exoPlayer.duration))
-                            true
+                            if (!isLive && !showSettingsDialog) {
+                                exoPlayer.seekTo((exoPlayer.currentPosition + 10000).coerceAtMost(exoPlayer.duration))
+                                true
+                            } else false
                         }
                         KeyEvent.KEYCODE_DPAD_UP -> {
-                            if (isLive && onNextChannel != null) onNextChannel()
-                            true
+                            if (isLive && onNextChannel != null && !showSettingsDialog) {
+                                onNextChannel()
+                                true
+                            } else false
                         }
                         KeyEvent.KEYCODE_DPAD_DOWN -> {
-                            if (isLive && onPrevChannel != null) onPrevChannel()
-                            true
+                            if (isLive && onPrevChannel != null && !showSettingsDialog) {
+                                onPrevChannel()
+                                true
+                            } else false
                         }
                         KeyEvent.KEYCODE_BACK -> {
-                            if (showControls) {
+                            if (showSettingsDialog) {
+                                showSettingsDialog = false
+                                true
+                            } else if (showControls) {
                                 showControls = false
                                 true
                             } else {
@@ -291,6 +448,25 @@ fun IptvPlayer(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Retry Playback")
                         }
+
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                        setDataAndType(android.net.Uri.parse(streamUrl), "video/*")
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "No external player found", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        ) {
+                            Icon(Icons.Default.OpenInNew, contentDescription = "External Player")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("External Player")
+                        }
                         
                         OutlinedButton(
                             onClick = onBack,
@@ -373,6 +549,17 @@ fun IptvPlayer(
 
                     // Aspect scale, reporting and stream properties
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        IconButton(
+                            onClick = { showSettingsDialog = true },
+                            modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings Options",
+                                tint = Color.White
+                            )
+                        }
+
                         IconButton(
                             onClick = {
                                 scaleMode = when (scaleMode) {
@@ -550,7 +737,355 @@ fun IptvPlayer(
                 }
             }
         }
+
+        // Settings Dialog overlay
+        if (showSettingsDialog) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .clickable { showSettingsDialog = false }
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .fillMaxHeight(0.85f)
+                        .clickable(enabled = false) {}, // prevent click-through
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
+                ) {
+                    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Playback & Stream Options",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            IconButton(onClick = { showSettingsDialog = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close Options", tint = Color.White)
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            // Left Column: Categories
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .padding(end = 16.dp)
+                            ) {
+                                PlayerSettingsCategoryItem(
+                                    text = "Audio Track",
+                                    isActive = selectedCategory == 0,
+                                    onFocused = { selectedCategory = 0 }
+                                )
+                                PlayerSettingsCategoryItem(
+                                    text = "Subtitles",
+                                    isActive = selectedCategory == 1,
+                                    onFocused = { selectedCategory = 1 }
+                                )
+                                PlayerSettingsCategoryItem(
+                                    text = "Aspect Ratio",
+                                    isActive = selectedCategory == 2,
+                                    onFocused = { selectedCategory = 2 }
+                                )
+                                PlayerSettingsCategoryItem(
+                                    text = "Decoder Mode",
+                                    isActive = selectedCategory == 3,
+                                    onFocused = { selectedCategory = 3 }
+                                )
+                            }
+                            
+                            // Divider
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(1.dp)
+                                    .background(Color.White.copy(alpha = 0.1f))
+                            )
+                            
+                            // Right Column: Options
+                            Column(
+                                modifier = Modifier
+                                    .weight(2.5f)
+                                    .fillMaxHeight()
+                                    .padding(start = 16.dp)
+                            ) {
+                                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                                    when (selectedCategory) {
+                                        0 -> {
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Auto (Default)",
+                                                    isSelected = isAudioAutoSelected,
+                                                    onClick = {
+                                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                            .buildUpon()
+                                                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                                            .build()
+                                                    }
+                                                )
+                                            }
+                                            items(audioTracks) { track ->
+                                                PlayerSettingsItem(
+                                                    text = track.label,
+                                                    isSelected = track.isSelected,
+                                                    onClick = {
+                                                        val trackGroup = exoPlayer.currentTracks.groups[track.groupIndex].mediaTrackGroup
+                                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                            .buildUpon()
+                                                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                                            .addOverride(TrackSelectionOverride(trackGroup, track.trackIndex))
+                                                            .build()
+                                                    }
+                                                )
+                                            }
+                                            if (audioTracks.isEmpty()) {
+                                                item {
+                                                    Text(
+                                                        text = "No audio tracks detected",
+                                                        color = Color.LightGray,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        modifier = Modifier.padding(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        1 -> {
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Off",
+                                                    isSelected = isSubtitlesDisabled,
+                                                    onClick = {
+                                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                            .buildUpon()
+                                                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                                            .build()
+                                                    }
+                                                )
+                                            }
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Auto",
+                                                    isSelected = isSubAutoSelected,
+                                                    onClick = {
+                                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                            .buildUpon()
+                                                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                                            .build()
+                                                    }
+                                                )
+                                            }
+                                            items(subtitleTracks) { track ->
+                                                PlayerSettingsItem(
+                                                    text = track.label,
+                                                    isSelected = track.isSelected,
+                                                    onClick = {
+                                                        val trackGroup = exoPlayer.currentTracks.groups[track.groupIndex].mediaTrackGroup
+                                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                                            .buildUpon()
+                                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                                            .addOverride(TrackSelectionOverride(trackGroup, track.trackIndex))
+                                                            .build()
+                                                    }
+                                                )
+                                            }
+                                            if (subtitleTracks.isEmpty()) {
+                                                item {
+                                                    Text(
+                                                        text = "No subtitle tracks detected",
+                                                        color = Color.LightGray,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        modifier = Modifier.padding(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        2 -> {
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Fit (Auto Aspect)",
+                                                    isSelected = scaleMode == PlayerScaleMode.FIT,
+                                                    onClick = { scaleMode = PlayerScaleMode.FIT }
+                                                )
+                                            }
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Zoom / Fill",
+                                                    isSelected = scaleMode == PlayerScaleMode.FILL,
+                                                    onClick = { scaleMode = PlayerScaleMode.FILL }
+                                                )
+                                            }
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Stretch",
+                                                    isSelected = scaleMode == PlayerScaleMode.STRETCH,
+                                                    onClick = { scaleMode = PlayerScaleMode.STRETCH }
+                                                )
+                                            }
+                                        }
+                                        3 -> {
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Auto (Default)",
+                                                    isSelected = decoderMode == "auto",
+                                                    onClick = { decoderMode = "auto" }
+                                                )
+                                            }
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Prefer Hardware Acceleration",
+                                                    isSelected = decoderMode == "hardware",
+                                                    onClick = { decoderMode = "hardware" }
+                                                )
+                                            }
+                                            item {
+                                                PlayerSettingsItem(
+                                                    text = "Compatibility Mode (Software Decoders)",
+                                                    isSelected = decoderMode == "software",
+                                                    onClick = { decoderMode = "software" }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+}
+
+@Composable
+fun PlayerSettingsCategoryItem(
+    text: String,
+    isActive: Boolean,
+    onFocused: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val backgroundColor = when {
+        isFocused -> MaterialTheme.colorScheme.primary
+        isActive -> Color.White.copy(alpha = 0.15f)
+        else -> Color.Transparent
+    }
+    val contentColor = when {
+        isFocused -> MaterialTheme.colorScheme.onPrimary
+        isActive -> MaterialTheme.colorScheme.primary
+        else -> Color.LightGray
+    }
+    
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .background(backgroundColor, RoundedCornerShape(8.dp))
+            .onFocusChanged { 
+                isFocused = it.isFocused
+                if (it.isFocused) {
+                    onFocused()
+                }
+            }
+            .focusable()
+            .clickable { onFocused() }
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = text,
+            color = contentColor,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+@Composable
+fun PlayerSettingsItem(
+    text: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val backgroundColor = when {
+        isSelected && isFocused -> MaterialTheme.colorScheme.primaryContainer
+        isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+        isFocused -> MaterialTheme.colorScheme.surfaceVariant
+        else -> Color.Transparent
+    }
+    val contentColor = when {
+        isSelected && isFocused -> MaterialTheme.colorScheme.onPrimaryContainer
+        isSelected -> MaterialTheme.colorScheme.primary
+        isFocused -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> Color.White
+    }
+    
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .background(backgroundColor, RoundedCornerShape(8.dp))
+            .clickable { onClick() }
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = text,
+            color = contentColor,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+        )
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "Selected",
+                tint = contentColor,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+private fun getTrackLabel(format: Format): String {
+    val language = format.language ?: "Unknown"
+    val label = format.label
+    val codecs = format.codecs
+    
+    val parts = mutableListOf<String>()
+    if (!label.isNullOrBlank()) {
+        parts.add(label)
+    } else if (!language.isNullOrBlank() && language != "und") {
+        parts.add(java.util.Locale(language).displayLanguage)
+    } else {
+        parts.add("Track")
+    }
+    
+    if (format.channelCount > 0) {
+        parts.add("${format.channelCount}ch")
+    }
+    if (!codecs.isNullOrBlank()) {
+        parts.add(codecs)
+    }
+    return parts.joinToString(" - ")
 }
 
 private fun formatTime(ms: Long): String {

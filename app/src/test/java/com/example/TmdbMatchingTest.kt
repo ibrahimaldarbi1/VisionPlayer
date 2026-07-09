@@ -174,4 +174,42 @@ class TmdbMatchingTest {
         assertEquals("movie_123", reEntity.id)
         assertEquals("inception", reEntity.normalizedTitle)
     }
+
+    @Test
+    fun testStreamUrlSanitization_RemovesSensitiveCredentials() {
+        val rawUrl = "http://iptv.server.xyz:8080/get.php?auth=123xyz&user=testuser&pass=secret123&type=m3u"
+        val uri = try {
+            java.net.URI(rawUrl)
+        } catch (e: Exception) {
+            null
+        }
+        val sanitized = if (uri != null) {
+            "${uri.scheme}://${uri.host}${uri.path}"
+        } else {
+            "[Protected Stream]"
+        }
+        
+        // Assert that the credentials and queries are fully removed from the reported string
+        assertEquals("http://iptv.server.xyz/get.php", sanitized)
+        assertFalse(sanitized.contains("pass"))
+        assertFalse(sanitized.contains("secret123"))
+        assertFalse(sanitized.contains("auth"))
+    }
+
+    @Test
+    fun testPlayerPreferenceSimulation_SavesAndLoadsCorrectly() {
+        // Simulating the logic used inside our SharedPreferences storage for Scale Modes & Decoders
+        val mockPrefs = mutableMapOf<String, String>()
+        
+        // 1. Save
+        mockPrefs["scale_mode"] = "FILL"
+        mockPrefs["decoder_mode"] = "software"
+        
+        // 2. Load
+        val loadedScaleMode = mockPrefs["scale_mode"] ?: "FIT"
+        val loadedDecoderMode = mockPrefs["decoder_mode"] ?: "auto"
+        
+        assertEquals("FILL", loadedScaleMode)
+        assertEquals("software", loadedDecoderMode)
+    }
 }

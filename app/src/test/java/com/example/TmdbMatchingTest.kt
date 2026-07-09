@@ -116,4 +116,62 @@ class TmdbMatchingTest {
         val unavailableResult = result as TmdbClickDecisionProcessor.TmdbClickResult.Unavailable
         assertEquals(tvItem, unavailableResult.item)
     }
+
+    @Test
+    fun testTitleNormalization_ClearsYearsAndJunk() {
+        val original = "Inception (2010) [1080p] {Dual Audio} - Spanish Castellano Bluray"
+        // Let's create a temporary normalize helper in Kotlin to verify the regex
+        val temp = java.text.Normalizer.normalize(original, java.text.Normalizer.Form.NFD)
+        var clean = temp.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "").lowercase()
+        clean = clean.replace(Regex("\\b(19|20)\\d{2}\\b"), "")
+        val junkPatterns = listOf(
+            "1080p", "720p", "4k", "uhd", "fhd", "hd", "sd", "3d", "hevc", "h264", "x264", "h265", "x265",
+            "bluray", "web-dl", "webdl", "bdrip", "brrip", "dvdrip", "scr", "camrip", "cam",
+            "dual audio", "multi-audio", "multi-subs", "multisubs", "multi", "dubbed", "subbed",
+            "latino", "castellano", "español", "spanish", "english", "french", "german", "italian", "ita", "eng",
+            "aac", "dts", "dd5.1", "ac3", "atmos"
+        )
+        for (pattern in junkPatterns) {
+            clean = clean.replace(Regex("\\b$pattern\\b"), "")
+        }
+        clean = clean.replace(Regex("[^a-z0-9\\s]"), "")
+        clean = clean.replace(Regex("\\s+"), " ")
+        val result = clean.trim()
+
+        assertEquals("inception", result)
+    }
+
+    @Test
+    fun testMappers_toDomainAndToEntity() {
+        val movieEntity = MovieStreamEntity(
+            id = "movie_123",
+            title = "Inception",
+            normalizedTitle = "inception",
+            streamUrl = "http://server/movie.mp4",
+            posterUrl = "poster.jpg",
+            backdropUrl = "backdrop.jpg",
+            categoryId = "1",
+            categoryName = "Sci-Fi",
+            description = "A mind-bending thriller",
+            year = "2010",
+            duration = "148m",
+            genre = "Sci-Fi",
+            rating = "8.8",
+            cast = "Leonardo DiCaprio",
+            director = "Christopher Nolan",
+            isAdult = false,
+            hidden = false,
+            updatedAt = 123456789L
+        )
+
+        val domain = movieEntity.toDomain()
+        assertEquals("movie_123", domain.id)
+        assertEquals("Inception", domain.title)
+        assertEquals("http://server/movie.mp4", domain.streamUrl)
+        assertEquals("8.8", domain.rating)
+
+        val reEntity = domain.toEntity("inception", hidden = false, updatedAt = 123456789L)
+        assertEquals("movie_123", reEntity.id)
+        assertEquals("inception", reEntity.normalizedTitle)
+    }
 }

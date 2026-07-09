@@ -848,7 +848,7 @@ fun HomeDashboardView(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No matches scheduled for your selections.",
+                                text = "No football matches found for your current selection.",
                                 color = Color.Gray,
                                 style = MaterialTheme.typography.bodyMedium
                             )

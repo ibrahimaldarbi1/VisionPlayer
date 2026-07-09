@@ -15,6 +15,8 @@ import kotlinx.coroutines.coroutineScope
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
+    var testFootballApiClient: FootballApiClient? = null
+
     fun clearCache() {
         // No-op now that we utilize Room SQLite database cache
     }
@@ -802,8 +804,9 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         if (selectedCompetitionCodes.isEmpty() && selectedTeamIds.isEmpty()) {
             return@withContext emptyList()
         }
-        try {
-            val client = FootballApiClient()
+
+        val matches: List<FootballMatch> = try {
+            val client = testFootballApiClient ?: FootballApiClient()
             val codesParam = if (selectedCompetitionCodes.isNotEmpty()) selectedCompetitionCodes.joinToString(",") else null
             val idsParam = if (selectedTeamIds.isNotEmpty()) selectedTeamIds.joinToString(",") else null
             
@@ -811,59 +814,73 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             if (response.enabled == false) {
                 return@withContext emptyList()
             }
-            val matches = response.matches ?: return@withContext emptyList()
-            
-            // Load all available channels to match against
-            val channels = try {
-                getLiveChannels(null).first() ?: emptyList()
-            } catch (e: Exception) {
-                emptyList()
-            }
+            val list = response.matches.orEmpty()
+            android.util.Log.d("IptvRepository", "Football backend returned ${list.size} matches.")
+            list
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to fetch football schedule from backend", e)
+            return@withContext emptyList()
+        }
 
-            val matcherMode = com.example.config.ProviderConfigRegistry.currentProfile.footballWatchChannelMatcher
-            
-            val filteredChannels = if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
+        if (matches.isEmpty()) {
+            return@withContext emptyList()
+        }
+
+        // Load all available channels to match against
+        val channels = try {
+            getLiveChannels(null).firstOrNull() ?: emptyList()
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to load local channels for football matching", e)
+            emptyList()
+        }
+        android.util.Log.d("IptvRepository", "Loaded ${channels.size} local channels for football matching.")
+
+        val matcherMode = com.example.config.ProviderConfigRegistry.currentProfile.footballWatchChannelMatcher
+
+        val watchCandidateChannels = when (matcherMode) {
+            com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY ->
                 channels.filter { FootballChannelMatcher.isBeinChannel(it) }
-            } else {
+            com.example.config.FootballWatchChannelMatcherMode.ALL_SPORTS ->
+                channels.filter { FootballChannelMatcher.isSportsChannel(it) }
+            com.example.config.FootballWatchChannelMatcherMode.ALL_CHANNELS ->
                 channels
-            }
+        }
+        android.util.Log.d("IptvRepository", "Filtered ${watchCandidateChannels.size} candidate channels for matcher mode $matcherMode.")
 
-            if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY && filteredChannels.isEmpty()) {
-                return@withContext matches.map { FootballWatchMatch(it, null, null, "NONE") }
+        if (watchCandidateChannels.isEmpty()) {
+            return@withContext matches.map { match ->
+                FootballWatchMatch(match, null, null, "NONE")
             }
+        }
 
-            val filteredEpgChannelIds = if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
-                filteredChannels.flatMap { listOf(it.epgId, it.id) }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-            } else {
-                emptyList()
-            }
+        val watchCandidateEpgIds = watchCandidateChannels
+            .flatMap { channel -> listOf(channel.epgId, channel.id) }
+            .filter { it.isNotBlank() }
+            .distinct()
 
-            matches.map { match ->
+        matches.map { match ->
+            try {
                 val kickoffMillis = FootballMatchUtils.parseUtcToMillis(match.kickoffUtc)
+                if (kickoffMillis <= 0L) {
+                    return@map FootballWatchMatch(match, null, null, "NONE")
+                }
                 val fromTime = kickoffMillis - (2 * 3600 * 1000) // kickoff - 2 hours
                 val toTime = kickoffMillis + (3 * 3600 * 1000)   // kickoff + 3 hours
                 
-                val epgInWindow = if (kickoffMillis > 0) {
-                    if (matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY) {
-                        if (filteredEpgChannelIds.isNotEmpty()) {
-                            dao.getEpgProgramsInWindowForChannels(fromTime, toTime, filteredEpgChannelIds)
-                        } else {
-                            emptyList()
-                        }
-                    } else {
-                        dao.getEpgProgramsInWindow(fromTime, toTime)
-                    }
+                val epgInWindow = if (
+                    matcherMode == com.example.config.FootballWatchChannelMatcherMode.BEIN_ONLY &&
+                    watchCandidateEpgIds.isNotEmpty()
+                ) {
+                    dao.getEpgProgramsInWindowForChannels(fromTime, toTime, watchCandidateEpgIds)
                 } else {
-                    emptyList()
+                    dao.getEpgProgramsInWindow(fromTime, toTime)
                 }
 
-                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, filteredChannels)
+                FootballMatchUtils.matchMatchWithEpg(match, epgInWindow, watchCandidateChannels)
+            } catch (e: Exception) {
+                android.util.Log.e("IptvRepository", "Football Watch matching failed for one match", e)
+                FootballWatchMatch(match, null, null, "NONE")
             }
-        } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to fetch football schedule", e)
-            emptyList()
         }
     }
 

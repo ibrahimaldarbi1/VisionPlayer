@@ -286,7 +286,7 @@ interface FootballApiService {
     ): FootballScheduleResponse
 }
 
-class FootballApiClient(private val baseUrl: String = "https://iptv-football-backendn.onrender.com") {
+open class FootballApiClient(private val baseUrl: String = "https://iptv-football-backendn.onrender.com") {
     private val retrofit = Retrofit.Builder()
         .baseUrl(baseUrl.removeSuffix("/") + "/")
         .addConverterFactory(MoshiConverterFactory.create())
@@ -294,11 +294,11 @@ class FootballApiClient(private val baseUrl: String = "https://iptv-football-bac
 
     val service: FootballApiService = retrofit.create(FootballApiService::class.java)
 
-    suspend fun getFootballOptions(providerId: String): FootballOptionsResponse {
+    open suspend fun getFootballOptions(providerId: String): FootballOptionsResponse {
         return service.getFootballOptions(providerId)
     }
 
-    suspend fun getFootballSchedule(
+    open suspend fun getFootballSchedule(
         providerId: String,
         competitionCodes: String?,
         teamIds: String?

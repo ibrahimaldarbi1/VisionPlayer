@@ -56,4 +56,20 @@ object FootballChannelMatcher {
                isBeinChannelName(channel.epgId) ||
                isBeinChannelName(channel.id)
     }
+
+    fun isSportsChannelName(value: String?): Boolean {
+        if (value.isNullOrBlank()) return false
+        val normalized = normalizeChannelName(value)
+        val patterns = listOf(
+            "sport", "bein", "sky", "espn", "ssc", "kass", "dubai", "abu dhabi", "tnt", "arena", "euro", "canal", "eleven", "liga", "premier", "سبورت", "رياض"
+        )
+        return patterns.any { pattern -> normalized.contains(pattern) }
+    }
+
+    fun isSportsChannel(channel: LiveChannel): Boolean {
+        return isSportsChannelName(channel.name) ||
+               isSportsChannelName(channel.epgId) ||
+               isSportsChannelName(channel.id) ||
+               channel.categoryName?.lowercase()?.contains("sport") == true
+    }
 }

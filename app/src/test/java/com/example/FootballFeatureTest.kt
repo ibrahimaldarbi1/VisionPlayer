@@ -8,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlinx.coroutines.flow.firstOrNull
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -448,6 +449,178 @@ class FootballFeatureTest {
             assertEquals(1, results.size)
             assertEquals("bein_sports_1", results[0].channelId)
             assertEquals("Match 1", results[0].title)
+        } finally {
+            database.close()
+        }
+    }
+
+    class MockFootballApiClient(
+        private val enabled: Boolean = true,
+        private val matches: List<FootballMatch> = emptyList(),
+        private val shouldThrow: Boolean = false
+    ) : FootballApiClient() {
+        override suspend fun getFootballSchedule(
+            providerId: String,
+            competitionCodes: String?,
+            teamIds: String?
+        ): FootballScheduleResponse {
+            if (shouldThrow) {
+                throw Exception("Simulated network failure")
+            }
+            return FootballScheduleResponse(
+                providerId = "provider_1",
+                enabled = enabled,
+                range = null,
+                matches = matches
+            )
+        }
+    }
+
+    @Test
+    fun testIptvRepositoryFootballSchedule() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        val match1 = FootballMatch(
+            matchId = 301,
+            competitionCode = "PL",
+            competitionName = "Premier League",
+            competitionEmblemUrl = "pl.png",
+            kickoffUtc = "2026-07-09T19:00:00.000Z",
+            status = "SCHEDULED",
+            matchday = 1,
+            stage = "Regular",
+            homeTeamId = 1,
+            homeTeamName = "Real Madrid",
+            homeTeamCrestUrl = "rm.png",
+            awayTeamId = 2,
+            awayTeamName = "Barcelona",
+            awayTeamCrestUrl = "barca.png",
+            homeScore = null,
+            awayScore = null
+        )
+
+        val match2 = FootballMatch(
+            matchId = 302,
+            competitionCode = "LL",
+            competitionName = "La Liga",
+            competitionEmblemUrl = "ll.png",
+            kickoffUtc = "2026-07-09T21:00:00.000Z",
+            status = "SCHEDULED",
+            matchday = 1,
+            stage = "Regular",
+            homeTeamId = 3,
+            homeTeamName = "Liverpool",
+            homeTeamCrestUrl = "lfc.png",
+            awayTeamId = 4,
+            awayTeamName = "Chelsea",
+            awayTeamCrestUrl = "cfc.png",
+            homeScore = null,
+            awayScore = null
+        )
+
+        val beinChannel = LiveChannelEntity(
+            id = "bein_ch",
+            name = "beIN Sports 1 HD",
+            streamUrl = "http://test",
+            logoUrl = "logo.png",
+            categoryId = "sports",
+            categoryName = "Sports",
+            epgId = "bein_sports_1",
+            channelNumber = 1,
+            isLocked = false,
+            isAdult = false,
+            hasCatchup = false,
+            hidden = false,
+            sortOrder = 1,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        val skyChannel = LiveChannelEntity(
+            id = "sky_ch",
+            name = "Sky Sports Main Event HD",
+            streamUrl = "http://test",
+            logoUrl = "logo.png",
+            categoryId = "sports",
+            categoryName = "Sports",
+            epgId = "sky_sports_1",
+            channelNumber = 2,
+            isLocked = false,
+            isAdult = false,
+            hasCatchup = false,
+            hidden = false,
+            sortOrder = 2,
+            updatedAt = System.currentTimeMillis()
+        )
+
+        val testKickoff = FootballMatchUtils.parseUtcToMillis(match1.kickoffUtc)
+        val beinProgram = EpgProgramEntity(
+            channelId = "bein_sports_1",
+            title = "Real Madrid vs Barcelona Live",
+            description = "El Clasico derby live match",
+            startTime = testKickoff - 1000000L,
+            endTime = testKickoff + 1000000L
+        )
+
+        try {
+            // 1. When backend returns 2 matches and no channels exist, result size is 2 and both have confidence NONE.
+            repository.testFootballApiClient = MockFootballApiClient(matches = listOf(match1, match2))
+            val result1 = repository.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
+            assertEquals(2, result1.size)
+            assertEquals("NONE", result1[0].confidence)
+            assertEquals("NONE", result1[1].confidence)
+
+            // 2. When backend returns 2 matches and EPG query throws (simulated by a separate repository with closed DB), result size is still 2 and both have confidence NONE.
+            val closedDb = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+                .allowMainThreadQueries()
+                .build()
+            val closedDao = closedDb.iptvDao()
+            val closedRepo = IptvRepository(closedDao, context)
+            closedRepo.testFootballApiClient = MockFootballApiClient(matches = listOf(match1, match2))
+            
+            // Insert channels first
+            closedDao.upsertLiveChannels(listOf(beinChannel))
+            // Close the DB to make query fail
+            closedDb.close()
+            
+            val result2 = closedRepo.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
+            assertEquals(2, result2.size)
+            assertEquals("NONE", result2[0].confidence)
+            assertEquals("NONE", result2[1].confidence)
+
+            // 3. When backend returns 2 matches and no beIN channels exist, result size is still 2 and both have confidence NONE.
+            dao.upsertLiveChannels(listOf(skyChannel))
+            val result3 = repository.getFootballSchedule("provider_1", listOf("PL", "LL"), emptyList())
+            assertEquals(2, result3.size)
+            assertEquals("NONE", result3[0].confidence)
+            assertEquals("NONE", result3[1].confidence)
+
+            // 4. When backend returns 0 matches, result is empty.
+            repository.testFootballApiClient = MockFootballApiClient(matches = emptyList())
+            val result4 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
+            assertTrue(result4.isEmpty())
+
+            // 5. When backend call fails, result is empty.
+            repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
+            val result5 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
+            assertTrue(result5.isEmpty())
+
+            // 6. When beIN channel + matching EPG exist, result contains match with STRONG confidence and matchedChannel.
+            dao.clearLiveChannels(null)
+            dao.upsertLiveChannels(listOf(beinChannel, skyChannel))
+            dao.insertEpgPrograms(listOf(beinProgram))
+            
+            repository.testFootballApiClient = MockFootballApiClient(matches = listOf(match1))
+            val result6 = repository.getFootballSchedule("provider_1", listOf("PL"), emptyList())
+            assertEquals(1, result6.size)
+            assertEquals("STRONG", result6[0].confidence)
+            assertEquals("bein_ch", result6[0].matchedChannel?.id)
+            assertEquals("beIN Sports 1 HD", result6[0].matchedChannel?.name)
+
         } finally {
             database.close()
         }

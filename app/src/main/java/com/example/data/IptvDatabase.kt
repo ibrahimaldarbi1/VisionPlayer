@@ -87,6 +87,7 @@ data class CategoryEntity(
     val type: String, // LIVE, MOVIE, SERIES
     val sortOrder: Int,
     val hidden: Boolean = false,
+    val pinned: Boolean = false,
     val updatedAt: Long
 )
 
@@ -313,6 +314,21 @@ interface IptvDao {
     @Query("SELECT * FROM categories WHERE type = :type ORDER BY sortOrder ASC, name ASC")
     fun observeCategories(type: String): Flow<List<CategoryEntity>>
 
+    @Query("SELECT * FROM categories WHERE type = :type AND hidden = 0 ORDER BY pinned DESC, sortOrder ASC, name ASC")
+    fun observeVisibleCategories(type: String): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM categories WHERE type = :type ORDER BY pinned DESC, sortOrder ASC, name ASC")
+    fun observeAllCategoriesForManagement(type: String): Flow<List<CategoryEntity>>
+
+    @Query("UPDATE categories SET hidden = :hidden WHERE type = :type AND id = :categoryId")
+    suspend fun setCategoryHidden(type: String, categoryId: String, hidden: Boolean)
+
+    @Query("UPDATE categories SET pinned = :pinned WHERE type = :type AND id = :categoryId")
+    suspend fun setCategoryPinned(type: String, categoryId: String, pinned: Boolean)
+
+    @Query("UPDATE categories SET sortOrder = :sortOrder WHERE type = :type AND id = :categoryId")
+    suspend fun updateCategorySortOrderSingle(type: String, categoryId: String, sortOrder: Int)
+
     @Query("SELECT * FROM live_channels WHERE (:categoryId IS NULL OR :categoryId = '' OR categoryId = :categoryId) ORDER BY sortOrder ASC, name ASC")
     fun observeLiveChannels(categoryId: String?): Flow<List<LiveChannelEntity>>
 
@@ -406,7 +422,7 @@ interface IptvDao {
         SeriesSeasonEntity::class,
         SeriesEpisodeEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
@@ -426,6 +442,7 @@ abstract class IptvDatabase : RoomDatabase() {
                         `type` TEXT NOT NULL, 
                         `sortOrder` INTEGER NOT NULL, 
                         `hidden` INTEGER NOT NULL, 
+                        `pinned` INTEGER NOT NULL DEFAULT 0, 
                         `updatedAt` INTEGER NOT NULL, 
                         PRIMARY KEY(`id`, `type`)
                     )
@@ -546,6 +563,12 @@ abstract class IptvDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `categories` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getDatabase(context: Context): IptvDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -553,7 +576,7 @@ abstract class IptvDatabase : RoomDatabase() {
                     IptvDatabase::class.java,
                     "iptv_database"
                 )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 INSTANCE = instance
                 instance

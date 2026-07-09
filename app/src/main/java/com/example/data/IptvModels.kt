@@ -10,6 +10,15 @@ data class Category(
     val type: String // "LIVE", "MOVIE", "SERIES"
 )
 
+data class CategoryManagementItem(
+    val id: String,
+    val name: String,
+    val type: String,
+    val sortOrder: Int,
+    val hidden: Boolean,
+    val pinned: Boolean
+)
+
 data class LiveChannel(
     val id: String,
     val name: String,

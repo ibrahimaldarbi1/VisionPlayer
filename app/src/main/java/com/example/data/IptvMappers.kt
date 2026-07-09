@@ -6,6 +6,15 @@ fun CategoryEntity.toDomain() = Category(
     type = type
 )
 
+fun CategoryEntity.toManagementItem() = CategoryManagementItem(
+    id = id,
+    name = name,
+    type = type,
+    sortOrder = sortOrder,
+    hidden = hidden,
+    pinned = pinned
+)
+
 fun LiveChannelEntity.toDomain() = LiveChannel(
     id = id,
     name = name,
@@ -75,12 +84,13 @@ fun SeriesEpisodeEntity.toDomain() = Episode(
 )
 
 // Domain/Xtream to Entity mapping helpers
-fun Category.toEntity(sortOrder: Int = 0, hidden: Boolean = false, updatedAt: Long = System.currentTimeMillis()) = CategoryEntity(
+fun Category.toEntity(sortOrder: Int = 0, hidden: Boolean = false, pinned: Boolean = false, updatedAt: Long = System.currentTimeMillis()) = CategoryEntity(
     id = id,
     name = name,
     type = type,
     sortOrder = sortOrder,
     hidden = hidden,
+    pinned = pinned,
     updatedAt = updatedAt
 )
 

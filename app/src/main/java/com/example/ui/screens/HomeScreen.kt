@@ -139,21 +139,44 @@ fun HomeScreen(
     // Initialize content flows
     LaunchedEffect(profile, activeTab, selectedCategoryLive, selectedCategoryMovie, selectedCategorySeries) {
         if (profile.features.liveTvEnabled) {
-            categoriesLive = repository.getCategories("LIVE").first()
+            repository.getCategories("LIVE").first() // Seed cache
             liveChannels = repository.getLiveChannels(selectedCategoryLive).first()
         }
         if (profile.features.moviesEnabled) {
-            categoriesMovie = repository.getCategories("MOVIE").first()
+            repository.getCategories("MOVIE").first() // Seed cache
             moviesList = repository.getMovies(selectedCategoryMovie).first()
         }
         if (profile.features.seriesEnabled) {
-            categoriesSeries = repository.getCategories("SERIES").first()
+            repository.getCategories("SERIES").first() // Seed cache
             seriesList = repository.getSeries(selectedCategorySeries).first()
         }
     }
 
+    LaunchedEffect(repository) {
+        repository.observeVisibleCategories("LIVE").collect { categoriesLive = it }
+    }
+    LaunchedEffect(repository) {
+        repository.observeVisibleCategories("MOVIE").collect { categoriesMovie = it }
+    }
+    LaunchedEffect(repository) {
+        repository.observeVisibleCategories("SERIES").collect { categoriesSeries = it }
+    }
+
+    val displayChannels = remember(liveChannels, categoriesLive) {
+        val visibleIds = categoriesLive.map { it.id }.toSet()
+        liveChannels.filter { it.categoryId in visibleIds }
+    }
+    val displayMovies = remember(moviesList, categoriesMovie) {
+        val visibleIds = categoriesMovie.map { it.id }.toSet()
+        moviesList.filter { it.categoryId in visibleIds }
+    }
+    val displaySeries = remember(seriesList, categoriesSeries) {
+        val visibleIds = categoriesSeries.map { it.id }.toSet()
+        seriesList.filter { it.categoryId in visibleIds }
+    }
+
     // Live search executor
-    LaunchedEffect(searchQuery, activeTab) {
+    LaunchedEffect(searchQuery, activeTab, categoriesLive, categoriesMovie, categoriesSeries) {
         if (searchQuery.isNotEmpty()) {
             repository.searchContent(
                 searchQuery,
@@ -161,7 +184,14 @@ fun HomeScreen(
                 profile.features.moviesEnabled,
                 profile.features.seriesEnabled
             ).collect { results ->
-                searchResult = results
+                val visibleLiveIds = categoriesLive.map { it.id }.toSet()
+                val visibleMovieIds = categoriesMovie.map { it.id }.toSet()
+                val visibleSeriesIds = categoriesSeries.map { it.id }.toSet()
+                searchResult = results.copy(
+                    liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
+                    movies = results.movies.filter { it.categoryId in visibleMovieIds },
+                    series = results.series.filter { it.categoryId in visibleSeriesIds }
+                )
             }
         } else {
             searchResult = SearchResults()
@@ -279,7 +309,7 @@ fun HomeScreen(
                     )
                     "LIVE" -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
-                            channels = liveChannels,
+                            channels = displayChannels,
                             categories = categoriesLive,
                             selectedCategory = selectedCategoryLive,
                             onCategorySelected = { selectedCategoryLive = it },
@@ -293,7 +323,7 @@ fun HomeScreen(
                     }
                     "MOVIES" -> if (profile.features.moviesEnabled) {
                         MoviesLibraryView(
-                            movies = moviesList,
+                            movies = displayMovies,
                             categories = categoriesMovie,
                             selectedCategory = selectedCategoryMovie,
                             onCategorySelected = { selectedCategoryMovie = it },
@@ -307,7 +337,7 @@ fun HomeScreen(
                     }
                     "SERIES" -> if (profile.features.seriesEnabled) {
                         SeriesLibraryView(
-                            seriesList = seriesList,
+                            seriesList = displaySeries,
                             categories = categoriesSeries,
                             selectedCategory = selectedCategorySeries,
                             onCategorySelected = { selectedCategorySeries = it },
@@ -321,7 +351,7 @@ fun HomeScreen(
                     }
                     "EPG" -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
                         TvGuideView(
-                            channels = liveChannels,
+                            channels = displayChannels,
                             repository = repository,
                             onPlayLive = onPlayLive,
                             isTv = isTv,
@@ -1741,6 +1771,16 @@ fun SettingsView(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var showProfileDialog by remember { mutableStateOf(false) }
+    var subScreen by remember { mutableStateOf<String?>(null) }
+
+    if (subScreen == "CATEGORY_MANAGEMENT") {
+        CategoryManagementView(
+            profile = profile,
+            repository = repository,
+            isTv = isTv,
+            onBack = { subScreen = null }
+        )
+    } else {
 
     if (showProfileDialog) {
         AlertDialog(
@@ -1827,6 +1867,33 @@ fun SettingsView(
                     Column {
                         Text("White-Label Provider Profile", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
                         Text("Currently Active: ${profile.name} (Tap to change profiles and see feature-hiding in action)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        // Category Management Section (Visible if at least one category type is enabled)
+        if (profile.features.liveTvEnabled || profile.features.moviesEnabled || profile.features.seriesEnabled) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .clickable { subScreen = "CATEGORY_MANAGEMENT" }
+                        .border(
+                            width = 1.dp,
+                            color = Color(0xFF334155).copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(20.dp)
+                        )
+                        .testTag("category_management_card")
+                ) {
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Settings, "Category Management", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text("Category Management", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Hide, reorder, or pin Live, Movie, and Series categories", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
@@ -1998,6 +2065,241 @@ fun SettingsView(
                 Icon(Icons.Default.ExitToApp, "Logout")
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("LOGOUT SESSION", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+    }
+}
+
+@Composable
+fun CategoryManagementView(
+    profile: com.example.config.ProviderProfile,
+    repository: IptvRepository,
+    isTv: Boolean,
+    onBack: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    
+    // Determine enabled tabs
+    val tabs = remember(profile) {
+        buildList {
+            if (profile.features.liveTvEnabled) add("LIVE")
+            if (profile.features.moviesEnabled) add("MOVIE")
+            if (profile.features.seriesEnabled) add("SERIES")
+        }
+    }
+    
+    var selectedTab by remember(tabs) { mutableStateOf(tabs.firstOrNull() ?: "LIVE") }
+    
+    val categories by repository.observeAllCategoriesForManagement(selectedTab)
+        .collectAsState(initial = emptyList())
+        
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Header
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 16.dp)
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.testTag("category_management_back_button")
+            ) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "CATEGORY MANAGEMENT",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Button(
+                onClick = {
+                    coroutineScope.launch {
+                        repository.resetCategoryCustomization(selectedTab)
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.testTag("reset_categories_button")
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Reset")
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Reset to Default", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        
+        // Tab Selection
+        if (tabs.size > 1) {
+            ScrollableTabRow(
+                selectedTabIndex = tabs.indexOf(selectedTab).coerceAtLeast(0),
+                containerColor = Color.Transparent,
+                contentColor = Color(profile.branding.primaryColor),
+                edgePadding = 0.dp,
+                modifier = Modifier.padding(bottom = 16.dp)
+            ) {
+                tabs.forEach { tab ->
+                    Tab(
+                        selected = selectedTab == tab,
+                        onClick = { selectedTab = tab },
+                        text = {
+                            Text(
+                                text = when (tab) {
+                                    "LIVE" -> "LIVE TV"
+                                    "MOVIE" -> "MOVIES"
+                                    "SERIES" -> "SERIES"
+                                    else -> tab
+                                },
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    )
+                }
+            }
+        }
+        
+        if (categories.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+            }
+        } else {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                items(categories.size, key = { categories[it].id }) { index ->
+                    val item = categories[index]
+                    var isFocused by remember { mutableStateOf(false) }
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isFocused) Color.White.copy(alpha = 0.15f) else Color(profile.branding.surfaceColor)
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { isFocused = it.isFocused }
+                            .focusable()
+                            .border(
+                                width = 1.dp,
+                                color = if (isFocused) Color.White else Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .testTag("category_item_${item.id}")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            // Category Name with pin status indicator
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                if (item.pinned) {
+                                    Icon(
+                                        imageVector = Icons.Default.PushPin,
+                                        contentDescription = "Pinned",
+                                        tint = Color(profile.branding.primaryColor),
+                                        modifier = Modifier
+                                            .size(16.dp)
+                                            .padding(end = 4.dp)
+                                    )
+                                }
+                                Text(
+                                    text = item.name,
+                                    color = if (item.hidden) Color.Gray else Color.White,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    textDecoration = if (item.hidden) androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                                    fontWeight = if (item.pinned) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                            
+                            // Reorder: Move Up
+                            IconButton(
+                                onClick = {
+                                    if (index > 0) {
+                                        coroutineScope.launch {
+                                            val listIds = categories.map { it.id }.toMutableList()
+                                            // Swap the current category ID with the one above it
+                                            val temp = listIds[index]
+                                            listIds[index] = listIds[index - 1]
+                                            listIds[index - 1] = temp
+                                            repository.updateCategorySortOrder(selectedTab, listIds)
+                                        }
+                                    }
+                                },
+                                enabled = index > 0,
+                                modifier = Modifier.testTag("move_up_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowUpward,
+                                    contentDescription = "Move Up",
+                                    tint = if (index > 0) Color.White else Color.Gray
+                                )
+                            }
+                            
+                            // Reorder: Move Down
+                            IconButton(
+                                onClick = {
+                                    if (index < categories.size - 1) {
+                                        coroutineScope.launch {
+                                            val listIds = categories.map { it.id }.toMutableList()
+                                            // Swap the current category ID with the one below it
+                                            val temp = listIds[index]
+                                            listIds[index] = listIds[index + 1]
+                                            listIds[index + 1] = temp
+                                            repository.updateCategorySortOrder(selectedTab, listIds)
+                                        }
+                                    }
+                                },
+                                enabled = index < categories.size - 1,
+                                modifier = Modifier.testTag("move_down_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDownward,
+                                    contentDescription = "Move Down",
+                                    tint = if (index < categories.size - 1) Color.White else Color.Gray
+                                )
+                            }
+                            
+                            // Pin / Unpin
+                            IconButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        repository.setCategoryPinned(selectedTab, item.id, !item.pinned)
+                                    }
+                                },
+                                modifier = Modifier.testTag("pin_button_${item.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PushPin,
+                                    contentDescription = if (item.pinned) "Unpin" else "Pin",
+                                    tint = if (item.pinned) Color(profile.branding.primaryColor) else Color.White.copy(alpha = 0.5f)
+                                )
+                            }
+                            
+                            // Hide / Show Switch
+                            Switch(
+                                checked = !item.hidden,
+                                onCheckedChange = { visible ->
+                                    coroutineScope.launch {
+                                        repository.setCategoryHidden(selectedTab, item.id, !visible)
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(profile.branding.primaryColor),
+                                    checkedTrackColor = Color(profile.branding.primaryColor).copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.testTag("hide_switch_${item.id}")
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -181,6 +181,37 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         }
     }.flowOn(Dispatchers.IO)
 
+    fun observeVisibleCategories(type: String): Flow<List<Category>> {
+        return dao.observeVisibleCategories(type).map { entities ->
+            entities.map { it.toDomain() }
+        }.flowOn(Dispatchers.IO)
+    }
+
+    fun observeAllCategoriesForManagement(type: String): Flow<List<CategoryManagementItem>> {
+        return dao.observeAllCategoriesForManagement(type).map { entities ->
+            entities.map { it.toManagementItem() }
+        }.flowOn(Dispatchers.IO)
+    }
+
+    suspend fun setCategoryHidden(type: String, categoryId: String, hidden: Boolean) = withContext(Dispatchers.IO) {
+        dao.setCategoryHidden(type, categoryId, hidden)
+    }
+
+    suspend fun setCategoryPinned(type: String, categoryId: String, pinned: Boolean) = withContext(Dispatchers.IO) {
+        dao.setCategoryPinned(type, categoryId, pinned)
+    }
+
+    suspend fun updateCategorySortOrder(type: String, orderedCategoryIds: List<String>) = withContext(Dispatchers.IO) {
+        orderedCategoryIds.forEachIndexed { index, categoryId ->
+            dao.updateCategorySortOrderSingle(type, categoryId, index)
+        }
+    }
+
+    suspend fun resetCategoryCustomization(type: String) = withContext(Dispatchers.IO) {
+        dao.clearCategoriesByType(type)
+        syncCategories(type)
+    }
+
     fun getLiveChannels(categoryId: String? = null): Flow<List<LiveChannel>> = flow {
         val cleanCategoryId = if (categoryId.isNullOrBlank()) null else categoryId
         

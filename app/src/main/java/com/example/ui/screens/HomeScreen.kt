@@ -474,22 +474,6 @@ fun PhoneBottomNavBar(
                 modifier = Modifier.testTag("nav_series")
             )
         }
-        if (profile.features.searchEnabled) {
-            NavigationBarItem(
-                selected = activeTab == "SEARCH",
-                onClick = { onTabSelected("SEARCH") },
-                icon = { Icon(Icons.Default.Search, "Search") },
-                label = { Text("Search") },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color.White,
-                    selectedTextColor = Color.White,
-                    indicatorColor = Color(profile.branding.primaryColor),
-                    unselectedIconColor = Color.Gray,
-                    unselectedTextColor = Color.Gray
-                ),
-                modifier = Modifier.testTag("nav_search")
-            )
-        }
         NavigationBarItem(
             selected = activeTab == "SETTINGS",
             onClick = { onTabSelected("SETTINGS") },
@@ -579,15 +563,6 @@ fun TvNavigationRail(
                     onClick = { onTabSelected("SERIES") },
                     icon = Icons.Default.VideoLibrary,
                     label = "Series",
-                    profile = profile
-                )
-            }
-            if (profile.features.searchEnabled) {
-                TvRailItem(
-                    selected = activeTab == "SEARCH",
-                    onClick = { onTabSelected("SEARCH") },
-                    icon = Icons.Default.Search,
-                    label = "Search",
                     profile = profile
                 )
             }
@@ -997,55 +972,6 @@ fun HomeDashboardView(
             }
         }
 
-        // Branded Recently Added Movies Row (Only if Movies enabled)
-        if (profile.features.moviesEnabled) {
-            item {
-                Column {
-                    Text(
-                        text = "Recently Added Movies",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(IptvMockData.Movies.filter { !it.isAdult }) { movie ->
-                            FocusableItemCard(
-                                title = movie.title,
-                                imageUrl = movie.posterUrl,
-                                subtitle = movie.genre,
-                                onClick = { onPlayMovie(movie) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Branded Recently Added Series Row (Only if Series enabled)
-        if (profile.features.seriesEnabled) {
-            item {
-                Column {
-                    Text(
-                        text = "Trending TV Series",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(IptvMockData.SeriesList.filter { !it.isAdult }) { series ->
-                            FocusableItemCard(
-                                title = series.title,
-                                imageUrl = series.posterUrl,
-                                subtitle = series.genre,
-                                onClick = { onSeriesClick(series) }
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

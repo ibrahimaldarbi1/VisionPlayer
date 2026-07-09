@@ -42,6 +42,7 @@ import com.example.config.ProviderConfigRegistry
 import com.example.data.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -119,15 +120,44 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(activeTab, repository.footballPrefs.showFootballScheduleOnHome, repository.footballPrefs.selectedFootballCompetitionCodes, repository.footballPrefs.selectedFootballTeamIds) {
-        if (activeTab == "HOME" && repository.footballPrefs.showFootballScheduleOnHome && profile.features.footballScheduleEnabled) {
+    LaunchedEffect(
+        activeTab,
+        repository.footballPrefs.showFootballScheduleOnHome,
+        repository.footballPrefs.selectedFootballCompetitionCodes,
+        repository.footballPrefs.selectedFootballTeamIds,
+        profile.features.footballScheduleEnabled
+    ) {
+        if (
+            activeTab == "HOME" &&
+            repository.footballPrefs.showFootballScheduleOnHome &&
+            profile.features.footballScheduleEnabled
+        ) {
             val codes = repository.footballPrefs.selectedFootballCompetitionCodes
             val ids = repository.footballPrefs.selectedFootballTeamIds
-            isLoadingFootball = true
-            footballMatches = repository.getFootballSchedule(profile.providerId, codes, ids)
-            isLoadingFootball = false
+
+            if (codes.isNotEmpty() || ids.isNotEmpty()) {
+                isLoadingFootball = true
+                try {
+                    footballMatches = withTimeoutOrNull(20000) {
+                        repository.getFootballSchedule(
+                            providerId = profile.providerId,
+                            selectedCompetitionCodes = codes,
+                            selectedTeamIds = ids
+                        )
+                    }.orEmpty()
+                } catch (e: Exception) {
+                    android.util.Log.e("HomeScreen", "Failed to load football watch schedule.", e)
+                    footballMatches = emptyList()
+                } finally {
+                    isLoadingFootball = false
+                }
+            } else {
+                footballMatches = emptyList()
+                isLoadingFootball = false
+            }
         } else {
             footballMatches = emptyList()
+            isLoadingFootball = false
         }
     }
 
@@ -844,7 +874,7 @@ fun HomeDashboardView(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No football matches found in the beIN guide right now.",
+                                text = "No scheduled matches found for your selected leagues/teams.",
                                 color = Color.Gray,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -3166,6 +3196,13 @@ fun FootballMatchCard(
                             color = Color.Gray,
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Broadcast channel not available yet",
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.padding(start = 8.dp)
                         )
                     }

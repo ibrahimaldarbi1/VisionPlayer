@@ -83,6 +83,60 @@ data class FootballWatchMatch(
     val confidence: String // "STRONG", "MEDIUM", "NONE"
 )
 
+@JsonClass(generateAdapter = true)
+data class FootballWatchScheduleResponse(
+    @Json(name = "providerId") val providerId: String?,
+    @Json(name = "enabled") val enabled: Boolean?,
+    @Json(name = "source") val source: String?,
+    @Json(name = "country") val country: String?,
+    @Json(name = "range") val range: FootballRange?,
+    @Json(name = "matches") val matches: List<FootballBroadcastMatch>?
+)
+
+@JsonClass(generateAdapter = true)
+data class FootballBroadcastMatch(
+    @Json(name = "matchId") val matchId: Int,
+    @Json(name = "competitionCode") val competitionCode: String?,
+    @Json(name = "competitionName") val competitionName: String?,
+    @Json(name = "competitionEmblemUrl") val competitionEmblemUrl: String?,
+    @Json(name = "kickoffUtc") val kickoffUtc: String?,
+    @Json(name = "status") val status: String?,
+    @Json(name = "matchday") val matchday: Int?,
+    @Json(name = "stage") val stage: String?,
+    @Json(name = "homeTeamId") val homeTeamId: Int?,
+    @Json(name = "homeTeamName") val homeTeamName: String?,
+    @Json(name = "homeTeamCrestUrl") val homeTeamCrestUrl: String?,
+    @Json(name = "awayTeamId") val awayTeamId: Int?,
+    @Json(name = "awayTeamName") val awayTeamName: String?,
+    @Json(name = "awayTeamCrestUrl") val awayTeamCrestUrl: String?,
+    @Json(name = "homeScore") val homeScore: Int?,
+    @Json(name = "awayScore") val awayScore: Int?,
+    @Json(name = "beinChannelName") val beinChannelName: String?,
+    @Json(name = "beinChannelNumber") val beinChannelNumber: String?,
+    @Json(name = "broadcastMatched") val broadcastMatched: Boolean?
+)
+
+fun FootballBroadcastMatch.toFootballMatch(): FootballMatch {
+    return FootballMatch(
+        matchId = matchId,
+        competitionCode = competitionCode,
+        competitionName = competitionName,
+        competitionEmblemUrl = competitionEmblemUrl,
+        kickoffUtc = kickoffUtc,
+        status = status,
+        matchday = matchday,
+        stage = stage,
+        homeTeamId = homeTeamId,
+        homeTeamName = homeTeamName,
+        homeTeamCrestUrl = homeTeamCrestUrl,
+        awayTeamId = awayTeamId,
+        awayTeamName = awayTeamName,
+        awayTeamCrestUrl = awayTeamCrestUrl,
+        homeScore = homeScore,
+        awayScore = awayScore
+    )
+}
+
 // --- 2. SharedPreferences Storage ---
 
 class FootballPrefs(context: Context) {
@@ -361,6 +415,14 @@ interface FootballApiService {
         @Query("provider_id") providerId: String,
         @Query("country") country: String
     ): BeinFootballScheduleResponse
+
+    @GET("api/v1/football/watch-schedule")
+    suspend fun getFootballWatchSchedule(
+        @Query("provider_id") providerId: String,
+        @Query("competition_codes") competitionCodes: String?,
+        @Query("team_ids") teamIds: String?,
+        @Query("country") country: String
+    ): FootballWatchScheduleResponse
 }
 
 open class FootballApiClient(private val baseUrl: String) {
@@ -388,5 +450,14 @@ open class FootballApiClient(private val baseUrl: String) {
         country: String
     ): BeinFootballScheduleResponse {
         return service.getBeinFootballSchedule(providerId, country)
+    }
+
+    open suspend fun getFootballWatchSchedule(
+        providerId: String,
+        competitionCodes: String?,
+        teamIds: String?,
+        country: String
+    ): FootballWatchScheduleResponse {
+        return service.getFootballWatchSchedule(providerId, competitionCodes, teamIds, country)
     }
 }

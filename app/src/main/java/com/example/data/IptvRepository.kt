@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
+import com.example.config.ProviderConfigRegistry
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
@@ -802,7 +804,11 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         selectedCompetitionCodes: List<String>,
         selectedTeamIds: List<Int>
     ): List<FootballWatchMatch> = withContext(Dispatchers.IO) {
-        val profile = com.example.config.ProviderConfigRegistry.currentProfile
+        if (selectedCompetitionCodes.isEmpty() && selectedTeamIds.isEmpty()) {
+            return@withContext emptyList()
+        }
+
+        val profile = ProviderConfigRegistry.currentProfile
 
         if (!profile.features.footballScheduleEnabled) {
             return@withContext emptyList()
@@ -811,44 +817,64 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         try {
             val client = testFootballApiClient ?: FootballApiClient(profile.footballBackendBaseUrl)
 
-            val response = client.getBeinFootballSchedule(
-                providerId = providerId,
-                country = profile.footballScheduleCountry
-            )
+            val codesParam = selectedCompetitionCodes
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString(",")
+
+            val idsParam = selectedTeamIds
+                .takeIf { it.isNotEmpty() }
+                ?.joinToString(",")
+
+            val response = withTimeoutOrNull(15000) {
+                client.getFootballWatchSchedule(
+                    providerId = providerId,
+                    competitionCodes = codesParam,
+                    teamIds = idsParam,
+                    country = profile.footballScheduleCountry
+                )
+            } ?: return@withContext emptyList()
 
             if (response.enabled == false) {
                 return@withContext emptyList()
             }
 
-            val beinMatches = response.matches.orEmpty()
+            val backendMatches = response.matches.orEmpty()
 
-            if (beinMatches.isEmpty()) {
+            if (backendMatches.isEmpty()) {
                 return@withContext emptyList()
             }
 
-            val localChannels = try {
-                getLiveChannels(null).firstOrNull().orEmpty()
-            } catch (e: Exception) {
-                android.util.Log.e("IptvRepository", "Failed to load local channels for beIN mapping.")
-                emptyList()
-            }
+            val localChannels = getCachedLiveChannelsForFootballMapping()
 
-            return@withContext beinMatches.map { beinMatch ->
+            return@withContext backendMatches.map { backendMatch ->
                 val localChannel = FootballChannelMatcher.findLocalBeinChannelForGuideEvent(
-                    eventChannelName = beinMatch.channelName,
-                    eventChannelNumber = beinMatch.channelNumber,
+                    eventChannelName = backendMatch.beinChannelName,
+                    eventChannelNumber = backendMatch.beinChannelNumber,
                     localChannels = localChannels
                 )
 
                 FootballWatchMatch(
-                    match = beinMatch.toFootballMatchCompat(),
+                    match = backendMatch.toFootballMatch(),
                     matchedChannel = localChannel,
-                    matchedProgramName = beinMatch.channelName,
-                    confidence = if (localChannel != null) "BEIN_GUIDE" else "CHANNEL_NOT_FOUND"
+                    matchedProgramName = backendMatch.beinChannelName,
+                    confidence = when {
+                        localChannel != null -> "BEIN_GUIDE"
+                        backendMatch.broadcastMatched == true -> "CHANNEL_NOT_FOUND"
+                        else -> "BROADCAST_NOT_FOUND"
+                    }
                 )
             }
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to load beIN football schedule.", e)
+            android.util.Log.e("IptvRepository", "Failed to load football watch schedule.", e)
+            emptyList()
+        }
+    }
+
+    suspend fun getCachedLiveChannelsForFootballMapping(): List<LiveChannel> = withContext(Dispatchers.IO) {
+        try {
+            dao.getCachedLiveChannelsSnapshot().map { it.toDomain() }
+        } catch (e: Exception) {
+            android.util.Log.e("IptvRepository", "Failed to load cached channels for football mapping.", e)
             emptyList()
         }
     }

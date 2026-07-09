@@ -457,6 +457,7 @@ class FootballFeatureTest {
     class MockFootballApiClient(
         private val enabled: Boolean = true,
         private val beinMatches: List<BeinFootballMatch> = emptyList(),
+        private val watchMatches: List<FootballBroadcastMatch> = emptyList(),
         private val shouldThrow: Boolean = false
     ) : FootballApiClient("https://mock-url.com") {
         override suspend fun getBeinFootballSchedule(
@@ -473,6 +474,25 @@ class FootballFeatureTest {
                 country = country,
                 range = null,
                 matches = beinMatches
+            )
+        }
+
+        override suspend fun getFootballWatchSchedule(
+            providerId: String,
+            competitionCodes: String?,
+            teamIds: String?,
+            country: String
+        ): FootballWatchScheduleResponse {
+            if (shouldThrow) {
+                throw Exception("Simulated network failure")
+            }
+            return FootballWatchScheduleResponse(
+                providerId = "provider_1",
+                enabled = enabled,
+                source = "football_data_plus_bein_guide",
+                country = country,
+                range = null,
+                matches = watchMatches
             )
         }
     }
@@ -586,15 +606,48 @@ class FootballFeatureTest {
         val dao = database.iptvDao()
         val repository = IptvRepository(dao, context)
 
-        val matchEvent = BeinFootballMatch(
-            id = "bein_event_1",
-            title = "Real Madrid vs Barcelona",
+        val matchEvent = FootballBroadcastMatch(
+            matchId = 12345,
+            competitionCode = "PD",
             competitionName = "La Liga",
+            competitionEmblemUrl = null,
             kickoffUtc = "2026-07-09T19:00:00.000Z",
-            endUtc = "2026-07-09T21:00:00.000Z",
             status = "SCHEDULED",
-            channelName = "beIN SPORTS 1",
-            channelNumber = "1"
+            matchday = 1,
+            stage = null,
+            homeTeamId = 86,
+            homeTeamName = "Real Madrid",
+            homeTeamCrestUrl = null,
+            awayTeamId = 81,
+            awayTeamName = "Barcelona",
+            awayTeamCrestUrl = null,
+            homeScore = null,
+            awayScore = null,
+            beinChannelName = "beIN SPORTS 1",
+            beinChannelNumber = "1",
+            broadcastMatched = true
+        )
+
+        val matchEventNoBroadcast = FootballBroadcastMatch(
+            matchId = 12346,
+            competitionCode = "PD",
+            competitionName = "La Liga",
+            competitionEmblemUrl = null,
+            kickoffUtc = "2026-07-09T19:00:00.000Z",
+            status = "SCHEDULED",
+            matchday = 1,
+            stage = null,
+            homeTeamId = 86,
+            homeTeamName = "Real Madrid",
+            homeTeamCrestUrl = null,
+            awayTeamId = 81,
+            awayTeamName = "Barcelona",
+            awayTeamCrestUrl = null,
+            homeScore = null,
+            awayScore = null,
+            beinChannelName = null,
+            beinChannelNumber = null,
+            broadcastMatched = false
         )
 
         val beinChannel = LiveChannelEntity(
@@ -615,30 +668,42 @@ class FootballFeatureTest {
         )
 
         try {
-            // 1. Backend beIN event is displayed even when localChannels is empty (CHANNEL_NOT_FOUND confidence)
-            repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(matchEvent))
-            val result1 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            // 1. Empty selected competitions/teams returns empty list.
+            repository.testFootballApiClient = MockFootballApiClient(watchMatches = listOf(matchEvent))
+            val resultEmpty = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            assertTrue(resultEmpty.isEmpty())
+
+            // 2. Real match with beIN broadcast but empty local channels returns CHANNEL_NOT_FOUND
+            val result1 = repository.getFootballSchedule("provider_1", listOf("PD"), emptyList())
             assertEquals(1, result1.size)
             assertEquals("CHANNEL_NOT_FOUND", result1[0].confidence)
             assertNull(result1[0].matchedChannel)
             assertEquals("beIN SPORTS 1", result1[0].matchedProgramName)
 
-            // 2. Backend beIN event with matching local channel returns confidence "BEIN_GUIDE"
+            // 3. Real match with matching local channel returns confidence "BEIN_GUIDE"
             dao.upsertLiveChannels(listOf(beinChannel))
-            val result2 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            val result2 = repository.getFootballSchedule("provider_1", listOf("PD"), emptyList())
             assertEquals(1, result2.size)
             assertEquals("BEIN_GUIDE", result2[0].confidence)
             assertNotNull(result2[0].matchedChannel)
             assertEquals("bein_ch1", result2[0].matchedChannel?.id)
 
-            // 3. Backend return empty
-            repository.testFootballApiClient = MockFootballApiClient(beinMatches = emptyList())
-            val result3 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            // 4. Real match but no beIN broadcast yet returns BROADCAST_NOT_FOUND
+            repository.testFootballApiClient = MockFootballApiClient(watchMatches = listOf(matchEventNoBroadcast))
+            val resultNoBroadcast = repository.getFootballSchedule("provider_1", listOf("PD"), emptyList())
+            assertEquals(1, resultNoBroadcast.size)
+            assertEquals("BROADCAST_NOT_FOUND", resultNoBroadcast[0].confidence)
+            assertNull(resultNoBroadcast[0].matchedChannel)
+            assertNull(resultNoBroadcast[0].matchedProgramName)
+
+            // 5. Backend return empty
+            repository.testFootballApiClient = MockFootballApiClient(watchMatches = emptyList())
+            val result3 = repository.getFootballSchedule("provider_1", listOf("PD"), emptyList())
             assertTrue(result3.isEmpty())
 
-            // 4. Backend throw exception
+            // 6. Backend throw exception
             repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
-            val result4 = repository.getFootballSchedule("provider_1", emptyList(), emptyList())
+            val result4 = repository.getFootballSchedule("provider_1", listOf("PD"), emptyList())
             assertTrue(result4.isEmpty())
 
         } finally {

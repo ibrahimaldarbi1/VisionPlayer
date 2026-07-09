@@ -415,6 +415,9 @@ interface IptvDao {
 
     @Query("SELECT MAX(updatedAt) FROM series_episodes WHERE seriesId = :seriesId")
     suspend fun getMaxEpisodeUpdatedAt(seriesId: String): Long?
+
+    @Query("SELECT * FROM live_channels ORDER BY sortOrder ASC, name ASC")
+    suspend fun getCachedLiveChannelsSnapshot(): List<LiveChannelEntity>
 }
 
 // --- Database ---

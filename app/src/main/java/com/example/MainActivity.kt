@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
             // Active Fullscreen Player Item State
             var activePlaybackItem by remember { mutableStateOf<PlaybackItem?>(null) }
+            var globalAddToMultiViewChannel by remember { mutableStateOf<LiveChannel?>(null) }
             val coroutineScope = rememberCoroutineScope()
 
             MyApplicationTheme {
@@ -99,6 +100,8 @@ class MainActivity : ComponentActivity() {
 
                             HomeScreen(
                                 repository = repository,
+                                addToMultiViewChannel = globalAddToMultiViewChannel,
+                                onAddToMultiViewHandled = { globalAddToMultiViewChannel = null },
                                 onPlayLive = { channel ->
                                     // Save Recently Watched for Live channel
                                     coroutineScope.launch {
@@ -208,6 +211,21 @@ class MainActivity : ComponentActivity() {
                                 subtitle = item.subtitle,
                                 isLive = item.isLive,
                                 initialPositionMs = item.initialPositionMs,
+                                onAddToMultiView = if (appProfileState.features.multiViewEnabled && item.isLive) {
+                                    {
+                                        globalAddToMultiViewChannel = LiveChannel(
+                                            id = item.contentId,
+                                            name = item.title,
+                                            streamUrl = item.streamUrl,
+                                            logoUrl = item.posterOrLogo,
+                                            categoryId = "",
+                                            categoryName = item.subtitle,
+                                            epgId = "",
+                                            channelNumber = 0
+                                        )
+                                        activePlaybackItem = null // exit solo player!
+                                    }
+                                } else null,
                                 onProgressUpdate = { position, duration ->
                                     // Live progress tracker persistence (Do not save live feeds progress)
                                     if (!item.isLive) {

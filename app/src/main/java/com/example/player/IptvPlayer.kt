@@ -69,7 +69,8 @@ fun IptvPlayer(
     onBack: () -> Unit,
     onNextChannel: (() -> Unit)? = null,
     onPrevChannel: (() -> Unit)? = null,
-    onReportProblem: (() -> Unit)? = null
+    onReportProblem: (() -> Unit)? = null,
+    onAddToMultiView: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -547,8 +548,22 @@ fun IptvPlayer(
                         }
                     }
 
-                    // Aspect scale, reporting and stream properties
+                    // Aspect scale, reporting, multi-view and stream properties
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (onAddToMultiView != null && isLive) {
+                            IconButton(
+                                onClick = onAddToMultiView,
+                                modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                                    .testTag("player_add_to_multiview_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = "Add to Multi-view",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+
                         IconButton(
                             onClick = { showSettingsDialog = true },
                             modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(12.dp))

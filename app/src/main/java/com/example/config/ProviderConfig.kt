@@ -33,7 +33,8 @@ data class FeatureConfig(
     val parentalControlEnabled: Boolean = true,
     val supportPageEnabled: Boolean = true,
     val updateCheckerEnabled: Boolean = true,
-    val announcementsEnabled: Boolean = true
+    val announcementsEnabled: Boolean = true,
+    val multiViewEnabled: Boolean = true
 )
 
 data class BrandingConfig(
@@ -70,7 +71,8 @@ object ProviderConfigRegistry {
             parentalControlEnabled = true,
             supportPageEnabled = true,
             updateCheckerEnabled = true,
-            announcementsEnabled = true
+            announcementsEnabled = true,
+            multiViewEnabled = true
         ),
         branding = BrandingConfig(
             primaryColor = 0xFF6366F1, // Indigo-500
@@ -106,7 +108,8 @@ object ProviderConfigRegistry {
             parentalControlEnabled = true,
             supportPageEnabled = true,
             updateCheckerEnabled = true,
-            announcementsEnabled = true
+            announcementsEnabled = true,
+            multiViewEnabled = true
         ),
         branding = BrandingConfig(
             primaryColor = 0xFF00ADB5, // Cyan Accent
@@ -142,7 +145,8 @@ object ProviderConfigRegistry {
             parentalControlEnabled = true,
             supportPageEnabled = true,
             updateCheckerEnabled = true,
-            announcementsEnabled = false
+            announcementsEnabled = false,
+            multiViewEnabled = false
         ),
         branding = BrandingConfig(
             primaryColor = 0xFF8A2BE2, // Purple

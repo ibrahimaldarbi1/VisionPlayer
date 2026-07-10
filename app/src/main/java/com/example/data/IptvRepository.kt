@@ -19,7 +19,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CancellationException
 import com.example.config.ProviderConfigRegistry
 
-class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
+class IptvRepository(
+    private val dao: IptvDao, 
+    private val context: android.content.Context,
+    private val xtreamApiClient: com.example.core.network.XtreamApiClient = com.example.core.network.XtreamApiClient(com.example.core.network.NetworkClientFactory.sharedClient)
+) {
 
     var testFootballApiClient: FootballApiClient? = null
     var footballScheduleTimeoutMs: Long = 25_000L
@@ -55,12 +59,12 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         if (!isDemo) {
             // Real Xtream Codes validation!
             val urlString = "$cleanServerUrl/player_api.php?username=$username&password=$token"
-            val response = IptvMockData.makeHttpGetRequest(urlString)
+            val response = xtreamApiClient.makeHttpGetRequest(urlString)
             if (response == null) {
                 return@withContext Result.failure(Exception("Unable to connect to Xtream Codes server. Please check the URL and connection."))
             }
             try {
-                val root = org.json.JSONObject(response)
+                val root = org.json.JSONObject(response!!)
                 val userInfo = root.optJSONObject("user_info")
                 if (userInfo == null) {
                     val auth = root.optInt("auth", -1)
@@ -124,7 +128,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             try {
                 val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
                     .getString("stream_format", "TS") ?: "TS"
-                val channels = IptvMockData.fetchXtreamLiveChannels(session, null, format)
+                val channels = xtreamApiClient.fetchXtreamLiveChannels(session, null, format)
                 val realEpg = XmltvEpgParser.fetchAndParseXtreamXmltv(session, channels)
                 dao.insertEpgPrograms(realEpg)
                 
@@ -165,7 +169,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             val session = dao.getSessionDirect()
             if (session != null && !isDemoSession(session)) {
                 try {
-                    val remote = IptvMockData.fetchXtreamCategories(session, type)
+                    val remote = xtreamApiClient.fetchXtreamCategories(session, type)
                     if (remote.isNotEmpty()) {
                         val entities = remote.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
                         dao.clearCategoriesByType(type)
@@ -243,7 +247,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 try {
                     val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
                         .getString("stream_format", "TS") ?: "TS"
-                    val remote = IptvMockData.fetchXtreamLiveChannels(session, cleanCategoryId, format)
+                    val remote = xtreamApiClient.fetchXtreamLiveChannels(session, cleanCategoryId, format)
                     if (remote.isNotEmpty()) {
                         val entities = remote.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
                         dao.clearLiveChannels(cleanCategoryId)
@@ -292,7 +296,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             val session = dao.getSessionDirect()
             if (session != null && !isDemoSession(session)) {
                 try {
-                    val remote = IptvMockData.fetchXtreamMovies(session, cleanCategoryId)
+                    val remote = xtreamApiClient.fetchXtreamMovies(session, cleanCategoryId)
                     if (remote.isNotEmpty()) {
                         val entities = remote.map { movie ->
                             movie.toEntity(
@@ -351,7 +355,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             val session = dao.getSessionDirect()
             if (session != null && !isDemoSession(session)) {
                 try {
-                    val remote = IptvMockData.fetchXtreamSeries(session, cleanCategoryId)
+                    val remote = xtreamApiClient.fetchXtreamSeries(session, cleanCategoryId)
                     if (remote.isNotEmpty()) {
                         val entities = remote.map { series ->
                             series.toEntity(
@@ -404,7 +408,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             val session = dao.getSessionDirect()
             if (session != null && !isDemoSession(session)) {
                 try {
-                    val remoteSeasons = IptvMockData.fetchXtreamSeasons(session, seriesId)
+                    val remoteSeasons = xtreamApiClient.fetchXtreamSeasons(session, seriesId)
                     if (remoteSeasons.isNotEmpty()) {
                         val seasonEntities = remoteSeasons.map { it.toEntity(updatedAt = System.currentTimeMillis()) }
                         dao.clearSeasons(seriesId)
@@ -413,7 +417,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                         // Fetch and cache episodes for this series automatically as well!
                         val allEpisodes = mutableListOf<Episode>()
                         remoteSeasons.forEach { season ->
-                            val remoteEpisodes = IptvMockData.fetchXtreamEpisodes(session, seriesId, season.id)
+                            val remoteEpisodes = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, season.id)
                             allEpisodes.addAll(remoteEpisodes)
                         }
                         if (allEpisodes.isNotEmpty()) {
@@ -510,7 +514,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             val session = dao.getSessionDirect()
             if (session != null && !isDemoSession(session)) {
                 try {
-                    val remote = IptvMockData.fetchXtreamEpisodes(session, seriesId, seasonId)
+                    val remote = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, seasonId)
                     if (remote.isNotEmpty()) {
                         val entities = remote.map { ep ->
                             ep.toEntity(
@@ -576,7 +580,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     suspend fun syncCategories(type: String) = withContext(Dispatchers.IO) {
         val session = dao.getSessionDirect() ?: return@withContext
         if (!isDemoSession(session)) {
-            val remote = IptvMockData.fetchXtreamCategories(session, type)
+            val remote = xtreamApiClient.fetchXtreamCategories(session, type)
             if (remote.isNotEmpty()) {
                 val entities = remote.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
                 dao.clearCategoriesByType(type)
@@ -590,7 +594,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         if (!isDemoSession(session)) {
             val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
                 .getString("stream_format", "TS") ?: "TS"
-            val remote = IptvMockData.fetchXtreamLiveChannels(session, categoryId, format)
+            val remote = xtreamApiClient.fetchXtreamLiveChannels(session, categoryId, format)
             if (remote.isNotEmpty()) {
                 val entities = remote.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
                 dao.clearLiveChannels(categoryId)
@@ -602,7 +606,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     suspend fun syncMovies(categoryId: String? = null) = withContext(Dispatchers.IO) {
         val session = dao.getSessionDirect() ?: return@withContext
         if (!isDemoSession(session)) {
-            val remote = IptvMockData.fetchXtreamMovies(session, categoryId)
+            val remote = xtreamApiClient.fetchXtreamMovies(session, categoryId)
             if (remote.isNotEmpty()) {
                 val entities = remote.map { movie ->
                     movie.toEntity(
@@ -619,7 +623,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
     suspend fun syncSeries(categoryId: String? = null) = withContext(Dispatchers.IO) {
         val session = dao.getSessionDirect() ?: return@withContext
         if (!isDemoSession(session)) {
-            val remote = IptvMockData.fetchXtreamSeries(session, categoryId)
+            val remote = xtreamApiClient.fetchXtreamSeries(session, categoryId)
             if (remote.isNotEmpty()) {
                 val entities = remote.map { series ->
                     series.toEntity(
@@ -761,7 +765,7 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             try {
                 val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
                     .getString("stream_format", "TS") ?: "TS"
-                val channels = IptvMockData.fetchXtreamLiveChannels(session, null, format)
+                val channels = xtreamApiClient.fetchXtreamLiveChannels(session, null, format)
                 val realEpg = XmltvEpgParser.fetchAndParseXtreamXmltv(session, channels)
                 if (realEpg.isNotEmpty()) {
                     dao.insertEpgPrograms(realEpg)

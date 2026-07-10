@@ -1,6 +1,10 @@
 package com.example.ui.screens
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,17 +18,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.config.ProviderConfigRegistry
+import com.example.data.IptvRepository
 
 @Composable
 fun SupportScreen(
+    repository: IptvRepository,
     onBack: () -> Unit
 ) {
     val profile = ProviderConfigRegistry.currentProfile
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
+
+    val activeSession by repository.activeSession.collectAsState(initial = null)
 
     var activeTicketType by remember { mutableStateOf("Channel Not Working") }
     var ticketDetails by remember { mutableStateOf("") }
@@ -42,8 +52,8 @@ fun SupportScreen(
     if (showConfirmation) {
         AlertDialog(
             onDismissRequest = { showConfirmation = false },
-            title = { Text("Support Ticket Submitted") },
-            text = { Text("Thank you! Your technical ticket has been filed securely with ${profile.name} support. Our diagnostics team will review your system logs shortly.") },
+            title = { Text("Support Ticket Form Opened") },
+            text = { Text("The bug report has been pre-composed with technical diagnostic logs and passed to your email app. Please send the email to finish submitting the ticket to ${profile.name} support.") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -105,7 +115,21 @@ fun SupportScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Card(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            val telegramUrl = if (profile.support.telegram.startsWith("http")) {
+                                profile.support.telegram
+                            } else {
+                                "https://${profile.support.telegram}"
+                            }
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(telegramUrl))
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No Telegram app or web browser found.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
                     colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor))
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -116,7 +140,18 @@ fun SupportScreen(
                     }
                 }
                 Card(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            val cleanPhone = profile.support.whatsapp.replace("+", "").replace(" ", "").replace("-", "")
+                            val whatsappUrl = "https://wa.me/$cleanPhone"
+                            try {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(whatsappUrl))
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No WhatsApp app or web browser found.", Toast.LENGTH_SHORT).show()
+                            }
+                        },
                     colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor))
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -143,8 +178,10 @@ fun SupportScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val redactedHost = activeSession?.serverUrl?.let { com.example.core.redaction.SensitiveDataRedactor.redactUrl(it) } ?: "demo.iptvserver.net"
                     DiagnosticItem(label = "Application Version", value = "v1.1.4 (WhiteLabel Build)")
                     DiagnosticItem(label = "Active Provider ID", value = profile.id)
+                    DiagnosticItem(label = "Redacted Host", value = redactedHost)
                     DiagnosticItem(label = "Android Version", value = "SDK ${Build.VERSION.SDK_INT} (${Build.VERSION.RELEASE})")
                     DiagnosticItem(label = "Hardware Model", value = "${Build.MANUFACTURER} ${Build.MODEL}")
                     DiagnosticItem(label = "Official Website", value = profile.support.website)
@@ -220,7 +257,38 @@ fun SupportScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Button(
-                        onClick = { showConfirmation = true },
+                        onClick = {
+                            val redactedHost = activeSession?.serverUrl?.let { com.example.core.redaction.SensitiveDataRedactor.redactUrl(it) } ?: "demo.iptvserver.net"
+                            val appVersion = "v1.1.4 (WhiteLabel Build)"
+                            val providerId = profile.id
+                            val androidVersion = "SDK ${Build.VERSION.SDK_INT} (${Build.VERSION.RELEASE})"
+                            val deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}"
+
+                            val diagnosticBody = """
+Category: $activeTicketType
+Details: $ticketDetails
+
+--- DIAGNOSTIC INFORMATION ---
+App Version: $appVersion
+Provider Name: ${profile.name} (ID: $providerId)
+Redacted Account Host: $redactedHost
+Android Version: $androidVersion
+Device Model: $deviceModel
+                            """.trimIndent()
+
+                            val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
+                                data = Uri.parse("mailto:")
+                                putExtra(Intent.EXTRA_EMAIL, arrayOf(profile.support.email))
+                                putExtra(Intent.EXTRA_SUBJECT, "[VisionPlayer] Support Ticket")
+                                putExtra(Intent.EXTRA_TEXT, diagnosticBody)
+                            }
+                            try {
+                                context.startActivity(emailIntent)
+                                showConfirmation = true
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No email client found to send support ticket.", Toast.LENGTH_LONG).show()
+                            }
+                        },
                         enabled = ticketDetails.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
                         modifier = Modifier

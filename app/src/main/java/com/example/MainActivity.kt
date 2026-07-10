@@ -185,6 +185,7 @@ class MainActivity : ComponentActivity() {
 
                         composable("support") {
                             SupportScreen(
+                                repository = repository,
                                 onBack = { navController.popBackStack() }
                             )
                         }

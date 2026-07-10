@@ -37,7 +37,11 @@ fun LiveChannelsView(
     profile: com.example.config.ProviderProfile,
     favorites: List<FavoriteEntity> = emptyList(),
     onToggleFavorite: (FavoriteEntity) -> Unit = {},
-    onStartMultiViewSetup: (() -> Unit)? = null
+    onStartMultiViewSetup: (() -> Unit)? = null,
+    initialLoading: Boolean = false,
+    refreshing: Boolean = false,
+    channelsError: String? = null,
+    onRetryChannels: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
@@ -174,6 +178,42 @@ fun LiveChannelsView(
             }
         }
 
+        // Small non-blocking progress indicator for refreshing
+        if (refreshing) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                color = Color(profile.branding.primaryColor)
+            )
+        }
+
+        // Error with cached channels (existing channels > 0)
+        if (channelsError != null && channels.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("channels_error_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = channelsError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = onRetryChannels,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
+                ) {
+                    Text("Retry")
+                }
+            }
+        }
+
+        // Channels Area
         val filteredChannels = remember(channels, searchQuery) {
             if (searchQuery.isBlank()) {
                 channels
@@ -182,7 +222,56 @@ fun LiveChannelsView(
             }
         }
 
-        if (filteredChannels.isEmpty()) {
+        if (initialLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = Color(profile.branding.primaryColor),
+                    modifier = Modifier.testTag("channels_loading_indicator")
+                )
+            }
+        } else if (channelsError != null && channels.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = channelsError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.testTag("channels_error_message")
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onRetryChannels,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
+                    modifier = Modifier.testTag("retry_channels_button")
+                ) {
+                    Text("Retry")
+                }
+            }
+        } else if (channels.isEmpty() && searchQuery.isBlank()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "No Live TV channels are available.",
+                    color = Color.Gray,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("no_channels_message")
+                )
+            }
+        } else if (filteredChannels.isEmpty() && searchQuery.isNotBlank()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -192,7 +281,8 @@ fun LiveChannelsView(
                 Text(
                     text = "No channels match \"$searchQuery\"",
                     color = Color.Gray,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("no_matching_channels_message")
                 )
             }
         } else {

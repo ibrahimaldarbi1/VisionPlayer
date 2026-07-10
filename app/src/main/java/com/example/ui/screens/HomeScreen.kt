@@ -57,8 +57,9 @@ import com.example.ui.feature.multiview.MultiViewSetupView
 import com.example.ui.feature.football.FootballConfigDialog
 import com.example.ui.feature.football.FootballViewModel
 import com.example.ui.feature.football.RepositoryFootballDataSource
+import com.example.ui.feature.live.LiveViewModel
+import com.example.ui.feature.live.RepositoryLiveDataSource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -112,6 +113,20 @@ fun HomeScreen(
     }
     val continueWatching by repository.continueWatching.collectAsState(initial = emptyList())
     val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
+
+    // Live ViewModel & States
+    val liveViewModel: LiveViewModel = viewModel(
+        factory = com.example.core.viewmodel.AppViewModelFactory {
+            LiveViewModel(
+                RepositoryLiveDataSource(repository)
+            )
+        }
+    )
+    val liveState by liveViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(profile) {
+        liveViewModel.onProfileChanged(profile)
+    }
 
     // Football ViewModel & States
     val footballViewModel: FootballViewModel = viewModel(
@@ -171,14 +186,11 @@ fun HomeScreen(
         }
     }
 
-    var liveChannels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
     var moviesList by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var seriesList by remember { mutableStateOf<List<Series>>(emptyList()) }
-    var categoriesLive by remember { mutableStateOf<List<Category>>(emptyList()) }
     var categoriesMovie by remember { mutableStateOf<List<Category>>(emptyList()) }
     var categoriesSeries by remember { mutableStateOf<List<Category>>(emptyList()) }
 
-    var selectedCategoryLive by remember { mutableStateOf<String?>(null) }
     var selectedCategoryMovie by remember { mutableStateOf<String?>(null) }
     var selectedCategorySeries by remember { mutableStateOf<String?>(null) }
 
@@ -189,11 +201,11 @@ fun HomeScreen(
     var unavailableTmdbItem by remember { mutableStateOf<HomeItem?>(null) }
 
     // Initialize content flows
-    LaunchedEffect(profile, activeTab, selectedCategoryLive, selectedCategoryMovie, selectedCategorySeries) {
-        if (profile.features.liveTvEnabled) {
-            repository.getCategories("LIVE").first() // Seed cache
-            liveChannels = repository.getLiveChannels(selectedCategoryLive).first()
-        }
+    LaunchedEffect(
+        profile,
+        selectedCategoryMovie,
+        selectedCategorySeries
+    ) {
         if (profile.features.moviesEnabled) {
             repository.getCategories("MOVIE").first() // Seed cache
             moviesList = repository.getMovies(selectedCategoryMovie).first()
@@ -205,19 +217,12 @@ fun HomeScreen(
     }
 
     LaunchedEffect(repository) {
-        repository.observeVisibleCategories("LIVE").collect { categoriesLive = it }
-    }
-    LaunchedEffect(repository) {
         repository.observeVisibleCategories("MOVIE").collect { categoriesMovie = it }
     }
     LaunchedEffect(repository) {
         repository.observeVisibleCategories("SERIES").collect { categoriesSeries = it }
     }
 
-    val displayChannels = remember(liveChannels, categoriesLive) {
-        val visibleIds = categoriesLive.map { it.id }.toSet()
-        liveChannels.filter { it.categoryId in visibleIds }
-    }
     val displayMovies = remember(moviesList, categoriesMovie) {
         val visibleIds = categoriesMovie.map { it.id }.toSet()
         moviesList.filter { it.categoryId in visibleIds }
@@ -228,7 +233,7 @@ fun HomeScreen(
     }
 
     // Live search executor
-    LaunchedEffect(searchQuery, activeTab, categoriesLive, categoriesMovie, categoriesSeries) {
+    LaunchedEffect(searchQuery, activeTab, liveState.categories, categoriesMovie, categoriesSeries) {
         if (searchQuery.isNotEmpty()) {
             repository.searchContent(
                 searchQuery,
@@ -236,7 +241,7 @@ fun HomeScreen(
                 profile.features.moviesEnabled,
                 profile.features.seriesEnabled
             ).collect { results ->
-                val visibleLiveIds = categoriesLive.map { it.id }.toSet()
+                val visibleLiveIds = liveState.categories.map { it.id }.toSet()
                 val visibleMovieIds = categoriesMovie.map { it.id }.toSet()
                 val visibleSeriesIds = categoriesSeries.map { it.id }.toSet()
                 searchResult = results.copy(
@@ -254,14 +259,14 @@ fun HomeScreen(
     if (activeMultiViewChannels != null) {
         MultiViewPlayerScreen(
             channels = activeMultiViewChannels!!,
-            allChannels = liveChannels,
+            allChannels = liveState.channels,
             onBack = { activeMultiViewChannels = null },
             profile = profile
         )
     } else if (showMultiViewSetup) {
         MultiViewSetupView(
-            allChannels = liveChannels,
-            categories = categoriesLive,
+            allChannels = liveState.channels,
+            categories = liveState.categories,
             pendingMultiViewChannels = pendingMultiViewChannels,
             profile = profile,
             onLaunch = { selected ->
@@ -395,10 +400,10 @@ fun HomeScreen(
                     )
                     "LIVE" -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
-                            channels = displayChannels,
-                            categories = categoriesLive,
-                            selectedCategory = selectedCategoryLive,
-                            onCategorySelected = { selectedCategoryLive = it },
+                            channels = liveState.channels,
+                            categories = liveState.categories,
+                            selectedCategory = liveState.selectedCategoryId,
+                            onCategorySelected = liveViewModel::selectCategory,
                             onPlayLive = onPlayLive,
                             repository = repository,
                             isTv = isTv,
@@ -408,7 +413,11 @@ fun HomeScreen(
                             onStartMultiViewSetup = {
                                 pendingMultiViewChannels = emptyList() // start fresh
                                 showMultiViewSetup = true
-                            }
+                            },
+                            initialLoading = liveState.initialLoading,
+                            refreshing = liveState.refreshing,
+                            channelsError = liveState.channelsError,
+                            onRetryChannels = liveViewModel::retryChannels
                         )
                     }
                     "MOVIES" -> if (profile.features.moviesEnabled) {
@@ -441,7 +450,7 @@ fun HomeScreen(
                     }
                     "EPG" -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
                         TvGuideView(
-                            channels = displayChannels,
+                            channels = liveState.channels,
                             repository = repository,
                             onPlayLive = onPlayLive,
                             isTv = isTv,

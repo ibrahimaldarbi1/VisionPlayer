@@ -295,6 +295,11 @@ class FootballFeatureTest {
     @Test
     fun testPrefsStorage() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences(
+            "football_settings",
+            Context.MODE_PRIVATE
+        ).edit().clear().commit()
+
         val prefs = FootballPrefs(context)
 
         assertFalse(prefs.hasSeenFootballCompetitionSetup)
@@ -454,13 +459,20 @@ class FootballFeatureTest {
         private val enabled: Boolean = true,
         private val competitions: List<FootballCompetitionPreference> = emptyList(),
         private val beinMatches: List<BeinFootballMatch> = emptyList(),
-        private val shouldThrow: Boolean = false
+        private val shouldThrow: Boolean = false,
+        private val delayMs: Long = 0L
     ) : FootballApiClient("https://mock-url.com") {
+
+        var competitionRequestCount = 0
 
         override suspend fun getFootballCompetitions(
             providerId: String,
             country: String
         ): FootballCompetitionsResponse {
+            competitionRequestCount++
+            if (delayMs > 0L) {
+                kotlinx.coroutines.delay(delayMs)
+            }
             if (shouldThrow) {
                 throw Exception("Simulated network failure")
             }
@@ -477,6 +489,9 @@ class FootballFeatureTest {
             country: String,
             competitionKeys: String?
         ): BeinFootballScheduleResponse {
+            if (delayMs > 0L) {
+                kotlinx.coroutines.delay(delayMs)
+            }
             if (shouldThrow) {
                 throw Exception("Simulated network failure")
             }
@@ -705,8 +720,13 @@ class FootballFeatureTest {
 
             // 6. Backend throw exception
             repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
-            val result4 = repository.getFootballSchedule("provider_1", listOf("la_liga"))
-            assertTrue(result4.isEmpty())
+            var didThrow = false
+            try {
+                repository.getFootballSchedule("provider_1", listOf("la_liga"))
+            } catch (e: Exception) {
+                didThrow = true
+            }
+            assertTrue(didThrow)
 
         } finally {
             database.close()
@@ -774,5 +794,357 @@ class FootballFeatureTest {
         assertEquals("BEIN_CHANNEL_MATCHED", result[0].confidence)
         assertEquals("ch_bein_1", result[0].matchedChannel?.id)
         assertEquals("beIN SPORTS 1", result[0].matchedProgramName)
+    }
+
+    // --- PROBLEM 6: Competition Cache Tests ---
+
+    @Test
+    fun testSaveCachedCompetitionsStoresKeyAndName() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = FootballPrefs(context)
+        prefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("la_liga", "La Liga"),
+            FootballCompetitionPreference("premier_league", "Premier League")
+        ))
+        val cached = prefs.getCachedCompetitions()
+        assertEquals(2, cached.size)
+        assertEquals("la_liga", cached[0].competitionKey)
+        assertEquals("La Liga", cached[0].name)
+        assertEquals("premier_league", cached[1].competitionKey)
+        assertEquals("Premier League", cached[1].name)
+    }
+
+    @Test
+    fun testGetCachedCompetitionsRestoresSavedList() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = FootballPrefs(context)
+        prefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("serie_a", "Serie A")
+        ))
+        val restored = prefs.getCachedCompetitions()
+        assertEquals(1, restored.size)
+        assertEquals("serie_a", restored[0].competitionKey)
+        assertEquals("Serie A", restored[0].name)
+    }
+
+    @Test
+    fun testCorruptJsonReturnsEmptyListAndDoesNotThrow() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val sharedPrefs = context.getSharedPreferences("football_settings", Context.MODE_PRIVATE)
+        sharedPrefs.edit().putString("cached_football_competitions_v1", "invalid-json-string").commit()
+
+        val prefs = FootballPrefs(context)
+        val result = prefs.getCachedCompetitions()
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun testCachedCompetitionsUpdatedAtIsStored() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = FootballPrefs(context)
+        val before = System.currentTimeMillis()
+        prefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("ligue_1", "Ligue 1")
+        ))
+        val updatedAt = prefs.cachedCompetitionsUpdatedAt
+        assertTrue(updatedAt >= before)
+    }
+
+    @Test
+    fun testFreshNonEmptyCacheReturnsImmediately() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("football_settings", Context.MODE_PRIVATE).edit().clear().commit()
+
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.footballPrefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("la_liga", "La Liga")
+        ))
+        repository.footballPrefs.cachedCompetitionsUpdatedAt = System.currentTimeMillis()
+
+        val mockClient = MockFootballApiClient(
+            competitions = listOf(FootballCompetitionPreference("premier_league", "Premier League"))
+        )
+        repository.testFootballApiClient = mockClient
+
+        val comps = repository.getFootballCompetitions("provider_1", forceRefresh = false)
+        assertEquals(1, comps.size)
+        assertEquals("la_liga", comps[0].competitionKey)
+        assertEquals(0, mockClient.competitionRequestCount)
+        database.close()
+    }
+
+    @Test
+    fun testForceRefreshCallsApiEvenWhenCacheIsFresh() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("football_settings", Context.MODE_PRIVATE).edit().clear().commit()
+
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.footballPrefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("la_liga", "La Liga")
+        ))
+        repository.footballPrefs.cachedCompetitionsUpdatedAt = System.currentTimeMillis()
+
+        val mockClient = MockFootballApiClient(
+            competitions = listOf(FootballCompetitionPreference("premier_league", "Premier League"))
+        )
+        repository.testFootballApiClient = mockClient
+
+        val comps = repository.getFootballCompetitions("provider_1", forceRefresh = true)
+        assertEquals(1, comps.size)
+        assertEquals("premier_league", comps[0].competitionKey)
+        assertEquals(1, mockClient.competitionRequestCount)
+        database.close()
+    }
+
+    @Test
+    fun testBackendFailureReturnsStaleCacheWhenExists() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("football_settings", Context.MODE_PRIVATE).edit().clear().commit()
+
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.footballPrefs.saveCachedCompetitions(listOf(
+            FootballCompetitionPreference("la_liga", "La Liga")
+        ))
+        repository.footballPrefs.cachedCompetitionsUpdatedAt = System.currentTimeMillis() - 48 * 60 * 60 * 1000L
+
+        repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
+
+        val comps = repository.getFootballCompetitions("provider_1", forceRefresh = false)
+        assertEquals(1, comps.size)
+        assertEquals("la_liga", comps[0].competitionKey)
+        database.close()
+    }
+
+    @Test
+    fun testBackendFailureReturnsEmptyListWhenNoCache() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("football_settings", Context.MODE_PRIVATE).edit().clear().commit()
+
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
+
+        val comps = repository.getFootballCompetitions("provider_1", forceRefresh = false)
+        assertTrue(comps.isEmpty())
+        database.close()
+    }
+
+    // --- PROBLEM 7: Schedule Error Tests ---
+
+    @Test
+    fun testSuccessfulBackendResponseWithMatchesReturnsMatches() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        val match = createBeinMatch(
+            id = "event_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League"
+        )
+        repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(match))
+
+        val result = repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        assertEquals(1, result.size)
+        assertEquals("event_1".hashCode(), result[0].match.matchId)
+        database.close()
+    }
+
+    @Test
+    fun testSuccessfulBackendResponseWithEmptyMatchesReturnsEmptyList() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.testFootballApiClient = MockFootballApiClient(beinMatches = emptyList())
+
+        val result = repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        assertTrue(result.isEmpty())
+        database.close()
+    }
+
+    @Test
+    fun testBackendExceptionIsPropagatedToCaller() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.testFootballApiClient = MockFootballApiClient(shouldThrow = true)
+
+        var didThrow = false
+        try {
+            repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        } catch (e: Exception) {
+            didThrow = true
+        }
+        assertTrue(didThrow)
+        database.close()
+    }
+
+    @Test
+    fun testScheduleTimeoutIsPropagatedToCaller() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        repository.footballScheduleTimeoutMs = 50L
+        repository.testFootballApiClient = MockFootballApiClient(delayMs = 100L)
+
+        var didThrowTimeout = false
+        try {
+            repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            didThrowTimeout = true
+        }
+        assertTrue(didThrowTimeout)
+        database.close()
+    }
+
+    @Test
+    fun testLocalChannelCacheEmptyDoesNotRemoveBackendMatches() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        val match = createBeinMatch(
+            id = "event_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League"
+        )
+        repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(match))
+
+        val result = repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        assertEquals(1, result.size)
+        assertEquals("event_1".hashCode(), result[0].match.matchId)
+        assertEquals("CHANNEL_NOT_FOUND", result[0].confidence)
+        assertNull(result[0].matchedChannel)
+        database.close()
+    }
+
+    @Test
+    fun testDuplicateBroadcastVariantsDeduplicateExplicit() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        val match1 = createBeinMatch(
+            id = "event_dup_1",
+            sourceMatchId = "event_dup_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League",
+            channelName = "beIN SPORTS 1"
+        )
+        val match2 = createBeinMatch(
+            id = "event_dup_2",
+            sourceMatchId = "event_dup_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League",
+            channelName = "beIN SPORTS 2"
+        )
+        repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(match1, match2))
+
+        val result = repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        assertEquals(1, result.size)
+        database.close()
+    }
+
+    @Test
+    fun testMappedLocalChannelVariantIsPreferredExplicit() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(context, IptvDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dao = database.iptvDao()
+        val repository = IptvRepository(dao, context)
+
+        val match1 = createBeinMatch(
+            id = "event_dup_1",
+            sourceMatchId = "event_dup_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League",
+            channelName = "beIN SPORTS 1",
+            channelNumber = "1"
+        )
+        val match2 = createBeinMatch(
+            id = "event_dup_2",
+            sourceMatchId = "event_dup_1",
+            title = "Liverpool vs Chelsea",
+            competitionName = "Premier League",
+            channelName = "beIN SPORTS 2",
+            channelNumber = "2"
+        )
+
+        val localCh2 = LiveChannelEntity(
+            id = "ch_bein_2",
+            name = "AR | beIN Sports 2",
+            streamUrl = "http://test",
+            logoUrl = "logo.png",
+            categoryId = "sports",
+            categoryName = "Sports",
+            epgId = "bein_sports_2",
+            channelNumber = 2,
+            isLocked = false,
+            isAdult = false,
+            hasCatchup = false,
+            hidden = false,
+            sortOrder = 2,
+            updatedAt = System.currentTimeMillis()
+        )
+        dao.upsertLiveChannels(listOf(localCh2))
+
+        repository.testFootballApiClient = MockFootballApiClient(beinMatches = listOf(match1, match2))
+
+        val result = repository.getFootballSchedule("provider_1", listOf("Premier League"))
+        assertEquals(1, result.size)
+        assertEquals("BEIN_CHANNEL_MATCHED", result[0].confidence)
+        assertEquals("ch_bein_2", result[0].matchedChannel?.id)
+        database.close()
+    }
+
+    // --- PROBLEM 8: Feature Flag Visibility Coverage ---
+
+    @Test
+    fun testVisibilityDecisions() {
+        assertFalse(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = false, userEnabled = true))
+        assertFalse(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = true, userEnabled = false))
+        assertTrue(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = true, userEnabled = true))
+        assertFalse(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = false, userEnabled = false))
     }
 }

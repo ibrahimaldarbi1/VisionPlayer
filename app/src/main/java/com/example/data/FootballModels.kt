@@ -438,3 +438,13 @@ open class FootballApiClient(private val baseUrl: String) {
         return service.getBeinFootballSchedule(providerId, country, competitionKeys)
     }
 }
+
+object FootballVisibilityHelper {
+    fun shouldShowFootballFeature(
+        featureEnabled: Boolean,
+        userEnabled: Boolean
+    ): Boolean {
+        return featureEnabled && userEnabled
+    }
+}
+

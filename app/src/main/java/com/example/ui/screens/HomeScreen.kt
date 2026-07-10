@@ -120,8 +120,8 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(activeTab) {
-        if (activeTab == "HOME" && !repository.footballPrefs.hasSeenFootballCompetitionSetup) {
+    LaunchedEffect(activeTab, profile.features.footballScheduleEnabled) {
+        if (activeTab == "HOME" && profile.features.footballScheduleEnabled && !repository.footballPrefs.hasSeenFootballCompetitionSetup) {
             showFootballSetupDialog = true
         }
     }
@@ -143,19 +143,14 @@ fun HomeScreen(
             footballLoadError = null
 
             try {
-                val result = withTimeoutOrNull(20000) {
-                    repository.getFootballSchedule(
-                        providerId = profile.providerId,
-                        selectedCompetitionKeys = selectedFootballCompetitionKeys
-                    )
-                }
-
-                if (result == null) {
-                    footballMatches = emptyList()
-                    footballLoadError = "Football schedule request timed out."
-                } else {
-                    footballMatches = result
-                }
+                footballMatches = repository.getFootballSchedule(
+                    providerId = profile.providerId,
+                    selectedCompetitionKeys = selectedFootballCompetitionKeys
+                )
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                android.util.Log.e("HomeScreen", "Football schedule request timed out.", e)
+                footballMatches = emptyList()
+                footballLoadError = "Football schedule request timed out."
             } catch (e: Exception) {
                 android.util.Log.e("HomeScreen", "Failed to load football schedule.", e)
                 footballMatches = emptyList()
@@ -468,6 +463,7 @@ fun HomeScreen(
                         onNavigateToParental = onNavigateToParental,
                         onLogout = onLogout,
                         isTv = isTv,
+                        selectedFootballCompetitionCount = selectedFootballCompetitionKeys.size,
                         onConfigureFootball = { showFootballSettingsDialog = true }
                     )
                 }
@@ -862,7 +858,10 @@ fun HomeDashboardView(
         }
 
         // --- FOOTBALL SCHEDULE ROW (Only if showFootballScheduleOnHome is true) ---
-        val showFootballRow = repository.footballPrefs.showFootballScheduleOnHome
+        val showFootballRow = com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(
+            featureEnabled = profile.features.footballScheduleEnabled,
+            userEnabled = repository.footballPrefs.showFootballScheduleOnHome
+        )
         val hasSelection = selectedFootballCompetitionKeys.isNotEmpty()
 
         if (showFootballRow) {
@@ -1921,6 +1920,7 @@ fun SettingsView(
     onNavigateToParental: () -> Unit,
     onLogout: () -> Unit,
     isTv: Boolean,
+    selectedFootballCompetitionCount: Int,
     onConfigureFootball: () -> Unit = {}
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -2130,30 +2130,37 @@ fun SettingsView(
             }
         }
 
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .clickable(onClick = onConfigureFootball)
-                    .border(
-                        width = 1.dp,
-                        color = Color(0xFF334155).copy(alpha = 0.3f),
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                    .testTag("football_settings_card")
-            ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.SportsSoccer,
-                        contentDescription = "Football Schedule",
-                        tint = Color(profile.branding.primaryColor),
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text("Football Schedule Settings", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Configure show/hide, selected competitions, and teams", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+        if (profile.features.footballScheduleEnabled) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .clickable(onClick = onConfigureFootball)
+                        .border(
+                            width = 1.dp,
+                            color = Color(0xFF334155).copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(20.dp)
+                        )
+                        .testTag("football_settings_card")
+                ) {
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.SportsSoccer,
+                            contentDescription = "Football Schedule",
+                            tint = Color(profile.branding.primaryColor),
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text("Football Schedule Settings", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                            val subtitleText = when {
+                                selectedFootballCompetitionCount == 0 -> "No competitions selected"
+                                selectedFootballCompetitionCount == 1 -> "1 competition selected"
+                                else -> "$selectedFootballCompetitionCount competitions selected"
+                            }
+                            Text(subtitleText, color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }

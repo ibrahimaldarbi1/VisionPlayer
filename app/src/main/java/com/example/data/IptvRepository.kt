@@ -12,12 +12,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.CancellationException
 import com.example.config.ProviderConfigRegistry
 
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
     var testFootballApiClient: FootballApiClient? = null
+    var footballScheduleTimeoutMs: Long = 15_000L
 
     fun clearCache() {
         // No-op now that we utilize Room SQLite database cache
@@ -858,13 +861,13 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 .distinct()
                 .joinToString(",")
 
-            val response = withTimeoutOrNull(15000) {
+            val response = withTimeout(footballScheduleTimeoutMs) {
                 client.getBeinFootballSchedule(
                     providerId = providerId,
                     country = profile.footballScheduleCountry,
                     competitionKeys = keysParam
                 )
-            } ?: return@withContext emptyList()
+            }
 
             if (response.enabled == false) {
                 return@withContext emptyList()
@@ -929,9 +932,20 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
             }
 
             return@withContext finalMatches
+        } catch (e: CancellationException) {
+            android.util.Log.e(
+                "IptvRepository",
+                "Football schedule request was cancelled or timed out.",
+                e
+            )
+            throw e
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to load football watch schedule.", e)
-            emptyList()
+            android.util.Log.e(
+                "IptvRepository",
+                "Failed to load football schedule.",
+                e
+            )
+            throw e
         }
     }
 

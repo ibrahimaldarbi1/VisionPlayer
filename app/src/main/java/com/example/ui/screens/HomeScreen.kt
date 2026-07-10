@@ -55,6 +55,8 @@ import com.example.ui.feature.series.SeriesDetailsDialog
 import com.example.ui.feature.multiview.MultiViewPlayerScreen
 import com.example.ui.feature.multiview.MultiViewSetupView
 import com.example.ui.feature.football.FootballConfigDialog
+import com.example.ui.feature.football.FootballViewModel
+import com.example.ui.feature.football.RepositoryFootballDataSource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -112,9 +114,11 @@ fun HomeScreen(
     val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
 
     // Football ViewModel & States
-    val footballViewModel: com.example.ui.feature.football.FootballViewModel = viewModel(
+    val footballViewModel: FootballViewModel = viewModel(
         factory = com.example.core.viewmodel.AppViewModelFactory {
-            com.example.ui.feature.football.FootballViewModel(repository)
+            FootballViewModel(
+                RepositoryFootballDataSource(repository)
+            )
         }
     )
     val footballState by footballViewModel.uiState.collectAsStateWithLifecycle()
@@ -122,26 +126,34 @@ fun HomeScreen(
     // 1. Profile initialization/change
     LaunchedEffect(profile) {
         footballViewModel.onProfileChanged(profile)
-        footballViewModel.initialize(profile)
     }
 
-    // 2. Home visibility
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    LaunchedEffect(activeTab, profile.providerId, lifecycleOwner) {
-        if (activeTab == "HOME") {
-            lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                footballViewModel.loadSchedule(profile.providerId)
-            }
+    // 2. Home visibility & disposal
+    LaunchedEffect(activeTab, profile.providerId) {
+        footballViewModel.onHomeVisibilityChanged(
+            visible = activeTab == "HOME",
+            providerId = profile.providerId
+        )
+    }
+
+    DisposableEffect(footballViewModel) {
+        onDispose {
+            footballViewModel.onHomeVisibilityChanged(
+                visible = false,
+                providerId = profile.providerId
+            )
         }
     }
 
-    // 3. Selected-key change
-    LaunchedEffect(footballState.selectedCompetitionKeys, footballState.showOnHome, footballState.retryCount, profile.providerId, lifecycleOwner) {
-        if (activeTab == "HOME") {
-            lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
-                footballViewModel.loadSchedule(profile.providerId)
-            }
-        }
+    // 3. Criteria change effect
+    LaunchedEffect(
+        footballState.selectedCompetitionKeys,
+        footballState.showOnHome,
+        profile.providerId
+    ) {
+        footballViewModel.onScheduleCriteriaChanged(
+            providerId = profile.providerId
+        )
     }
 
     // Multi-view states
@@ -484,7 +496,7 @@ fun HomeScreen(
         )
     }
 
-    if (footballState.setupDialogVisible) {
+    if (footballState.featureEnabled && footballState.setupDialogVisible) {
         FootballConfigDialog(
             onDismiss = { footballViewModel.closeSetupDialog() },
             profile = profile,
@@ -502,7 +514,7 @@ fun HomeScreen(
                 )
             },
             onSave = {
-                footballViewModel.saveCompetitionSelection(
+                footballViewModel.saveInitialSetupSelection(
                     footballState.draftCompetitionKeys,
                     profile.providerId
                 )
@@ -511,7 +523,7 @@ fun HomeScreen(
         )
     }
 
-    if (footballState.settingsDialogVisible) {
+    if (footballState.featureEnabled && footballState.settingsDialogVisible) {
         FootballConfigDialog(
             onDismiss = { footballViewModel.closeSettingsDialog() },
             profile = profile,
@@ -529,7 +541,7 @@ fun HomeScreen(
                 )
             },
             onSave = {
-                footballViewModel.saveCompetitionSelection(
+                footballViewModel.saveSettingsSelection(
                     footballState.draftCompetitionKeys,
                     profile.providerId
                 )

@@ -2,7 +2,9 @@ package com.example.ui.feature.football
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.IptvRepository
+import com.example.config.ProviderProfile
+import com.example.data.FootballCompetitionPreference
+import com.example.data.FootballWatchMatch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -12,58 +14,41 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
 class FootballViewModel(
-    private val repository: IptvRepository
+    private val dataSource: FootballDataSource
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FootballUiState())
     val uiState: StateFlow<FootballUiState> = _uiState.asStateFlow()
 
+    private var isHomeVisible: Boolean = false
+    private var currentProviderId: String? = null
+
     private var activeCompetitionJob: Job? = null
     private var activeScheduleJob: Job? = null
 
-    fun initialize(profile: com.example.config.ProviderProfile) {
-        val isEnabled = profile.features.footballScheduleEnabled
-        val showOnHome = repository.footballPrefs.showFootballScheduleOnHome
-        val keys = repository.footballPrefs.selectedFootballCompetitionKeys.toSet()
-        val hasSeenSetup = repository.footballPrefs.hasSeenFootballCompetitionSetup
+    private var activeScheduleKey: ScheduleRequestKey? = null
+    private var scheduleGeneration: Long = 0L
 
-        _uiState.update { currentState ->
-            if (!isEnabled) {
-                currentState.copy(
-                    featureEnabled = false,
-                    matches = emptyList(),
-                    competitionsLoading = false,
-                    scheduleLoading = false,
-                    setupDialogVisible = false,
-                    settingsDialogVisible = false,
-                    competitionsError = null,
-                    scheduleError = null
-                )
-            } else {
-                currentState.copy(
-                    featureEnabled = true,
-                    showOnHome = showOnHome,
-                    selectedCompetitionKeys = keys,
-                    hasSeenSetup = hasSeenSetup,
-                    setupDialogVisible = if (!hasSeenSetup) true else currentState.setupDialogVisible,
-                    competitions = repository.footballPrefs.getCachedCompetitions()
-                )
-            }
-        }
+    private var competitionGeneration: Long = 0L
+    private var activeCompetitionProviderId: String? = null
 
-        if (isEnabled) {
-            loadCompetitions(profile.providerId, forceRefresh = false)
-        }
+    private data class ScheduleRequestKey(
+        val providerId: String,
+        val competitionKeys: List<String>
+    )
+
+    fun initialize(profile: ProviderProfile) {
+        onProfileChanged(profile)
     }
 
-    fun onProfileChanged(profile: com.example.config.ProviderProfile) {
+    fun onProfileChanged(profile: ProviderProfile) {
         val isEnabled = profile.features.footballScheduleEnabled
-        if (!isEnabled) {
-            activeCompetitionJob?.cancel()
-            activeCompetitionJob = null
-            activeScheduleJob?.cancel()
-            activeScheduleJob = null
+        val providerId = profile.providerId
 
+        if (!isEnabled) {
+            currentProviderId = providerId
+            cancelCompetitionRequest(clearLoading = true)
+            cancelScheduleRequest(clearLoading = true)
             _uiState.update {
                 it.copy(
                     featureEnabled = false,
@@ -73,107 +58,174 @@ class FootballViewModel(
                     setupDialogVisible = false,
                     settingsDialogVisible = false,
                     competitionsError = null,
-                    scheduleError = null
+                    scheduleError = null,
+                    selectedCompetitionKeys = emptySet(),
+                    draftCompetitionKeys = emptySet(),
+                    hasSeenSetup = false
                 )
             }
-        } else {
-            val showOnHome = repository.footballPrefs.showFootballScheduleOnHome
-            val keys = repository.footballPrefs.selectedFootballCompetitionKeys.toSet()
-            val hasSeenSetup = repository.footballPrefs.hasSeenFootballCompetitionSetup
-
-            _uiState.update { currentState ->
-                currentState.copy(
-                    featureEnabled = true,
-                    showOnHome = showOnHome,
-                    selectedCompetitionKeys = keys,
-                    hasSeenSetup = hasSeenSetup,
-                    setupDialogVisible = if (!hasSeenSetup) true else currentState.setupDialogVisible,
-                    competitions = repository.footballPrefs.getCachedCompetitions()
-                )
-            }
-        }
-    }
-
-    fun loadCompetitions(providerId: String, forceRefresh: Boolean = false) {
-        if (activeCompetitionJob?.isActive == true && !forceRefresh) {
             return
         }
 
-        activeCompetitionJob?.cancel()
-        activeCompetitionJob = viewModelScope.launch {
-            val cached = repository.footballPrefs.getCachedCompetitions()
-            val showLoading = cached.isEmpty()
+        val providerChanged = (currentProviderId != providerId)
+        currentProviderId = providerId
 
+        if (providerChanged) {
+            cancelCompetitionRequest(clearLoading = true)
+            cancelScheduleRequest(clearLoading = true)
             _uiState.update {
                 it.copy(
-                    competitions = cached,
-                    competitionsLoading = showLoading,
-                    competitionsError = null
+                    matches = emptyList(),
+                    competitionsError = null,
+                    scheduleError = null,
+                    competitionsLoading = false,
+                    scheduleLoading = false
                 )
             }
+        }
 
+        val savedShowOnHome = dataSource.getShowOnHome()
+        val savedKeys = dataSource.getSelectedCompetitionKeys().toSet()
+        val savedHasSeenSetup = dataSource.hasSeenSetup()
+        val cachedComps = dataSource.getCachedCompetitions()
+
+        _uiState.update { currentState ->
+            currentState.copy(
+                featureEnabled = true,
+                showOnHome = savedShowOnHome,
+                selectedCompetitionKeys = savedKeys,
+                hasSeenSetup = savedHasSeenSetup,
+                setupDialogVisible = if (!savedHasSeenSetup) true else currentState.setupDialogVisible,
+                competitions = cachedComps
+            )
+        }
+
+        loadCompetitions(providerId, forceRefresh = false)
+
+        if (isHomeVisible && savedShowOnHome && savedKeys.isNotEmpty()) {
+            loadSchedule(providerId, force = false)
+        }
+    }
+
+    fun onHomeVisibilityChanged(visible: Boolean, providerId: String) {
+        isHomeVisible = visible
+
+        if (!visible) {
+            cancelScheduleRequest(clearLoading = true)
+            return
+        }
+
+        val state = _uiState.value
+        if (state.featureEnabled && state.showOnHome && state.selectedCompetitionKeys.isNotEmpty()) {
+            loadSchedule(providerId, force = false)
+        }
+    }
+
+    fun onScheduleCriteriaChanged(providerId: String) {
+        val state = _uiState.value
+        if (!state.featureEnabled) {
+            cancelScheduleRequest(clearLoading = true)
+            _uiState.update { it.copy(matches = emptyList()) }
+            return
+        }
+        if (!state.showOnHome) {
+            cancelScheduleRequest(clearLoading = true)
+            _uiState.update { it.copy(matches = emptyList()) }
+            return
+        }
+        if (state.selectedCompetitionKeys.isEmpty()) {
+            cancelScheduleRequest(clearLoading = true)
+            _uiState.update { it.copy(matches = emptyList()) }
+            return
+        }
+        if (!isHomeVisible) {
+            cancelScheduleRequest(clearLoading = true)
+            return
+        }
+        loadSchedule(providerId, force = false)
+    }
+
+    fun loadCompetitions(providerId: String, forceRefresh: Boolean = false) {
+        if (activeCompetitionJob?.isActive == true && !forceRefresh && activeCompetitionProviderId == providerId) {
+            return
+        }
+
+        if (forceRefresh || activeCompetitionProviderId != providerId) {
+            cancelCompetitionRequest(clearLoading = false)
+        }
+
+        activeCompetitionProviderId = providerId
+        competitionGeneration++
+        val requestGeneration = competitionGeneration
+
+        val cached = dataSource.getCachedCompetitions()
+        val showLoading = cached.isEmpty()
+
+        _uiState.update {
+            it.copy(
+                competitions = cached,
+                competitionsLoading = showLoading,
+                competitionsError = null
+            )
+        }
+
+        activeCompetitionJob = viewModelScope.launch {
             try {
-                val freshComps = repository.getFootballCompetitions(providerId, forceRefresh)
-                _uiState.update {
-                    it.copy(
-                        competitions = freshComps.ifEmpty { cached }
-                    )
+                val freshComps = dataSource.getCompetitions(providerId, forceRefresh)
+                if (requestGeneration == competitionGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            competitions = freshComps.ifEmpty { cached }
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    if (it.competitions.isEmpty()) {
-                        it.copy(competitionsError = "Could not load football competitions.")
-                    } else {
-                        it
+                if (requestGeneration == competitionGeneration) {
+                    _uiState.update {
+                        if (it.competitions.isEmpty()) {
+                            it.copy(competitionsError = "Could not load football competitions.")
+                        } else {
+                            it
+                        }
                     }
                 }
             } finally {
-                _uiState.update {
-                    it.copy(competitionsLoading = false)
+                if (requestGeneration == competitionGeneration) {
+                    _uiState.update {
+                        it.copy(competitionsLoading = false)
+                    }
+                    activeCompetitionProviderId = null
                 }
             }
         }
     }
 
-    fun loadSchedule(providerId: String) {
+    fun loadSchedule(providerId: String, force: Boolean = false) {
         val state = _uiState.value
-        if (!state.featureEnabled) {
-            _uiState.update {
-                it.copy(
-                    matches = emptyList(),
-                    scheduleLoading = false,
-                    scheduleError = null
-                )
-            }
+        if (!state.featureEnabled || !state.showOnHome || state.selectedCompetitionKeys.isEmpty() || !isHomeVisible) {
             return
         }
 
-        if (!state.showOnHome) {
-            _uiState.update {
-                it.copy(
-                    matches = emptyList(),
-                    scheduleLoading = false,
-                    scheduleError = null
-                )
-            }
+        val normalizedKeys = state.selectedCompetitionKeys.toList().sorted()
+        val requestKey = ScheduleRequestKey(providerId, normalizedKeys)
+
+        if (activeScheduleKey == requestKey && _uiState.value.scheduleLoading && !force) {
             return
         }
 
-        if (state.selectedCompetitionKeys.isEmpty()) {
-            _uiState.update {
-                it.copy(
-                    matches = emptyList(),
-                    scheduleLoading = false,
-                    scheduleError = null
-                )
-            }
-            return
-        }
+        cancelScheduleRequest(clearLoading = false)
 
-        if (activeScheduleJob?.isActive == true) {
-            return
+        activeScheduleKey = requestKey
+        scheduleGeneration++
+        val requestGeneration = scheduleGeneration
+
+        _uiState.update {
+            it.copy(
+                scheduleLoading = true,
+                scheduleError = null
+            )
         }
 
         activeScheduleJob = viewModelScope.launch {
@@ -183,45 +235,38 @@ class FootballViewModel(
             android.util.Log.d(
                 "FootballTrace",
                 "UI_START id=$loadId " +
-                    "competitions=${state.selectedCompetitionKeys.size} " +
+                    "competitions=${normalizedKeys.size} " +
                     "retry=$retryCount"
             )
 
-            _uiState.update {
-                it.copy(
-                    scheduleLoading = true,
-                    scheduleError = null
-                )
-            }
-
             try {
-                val matches = repository.getFootballSchedule(
-                    providerId = providerId,
-                    selectedCompetitionKeys = state.selectedCompetitionKeys.toList()
-                )
-
-                _uiState.update {
-                    it.copy(
-                        matches = matches
+                val matches = dataSource.getSchedule(providerId, normalizedKeys)
+                if (requestGeneration == scheduleGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            matches = matches,
+                            scheduleError = null
+                        )
+                    }
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "UI_SUCCESS id=$loadId " +
+                            "matches=${matches.size}"
                     )
                 }
-
-                android.util.Log.d(
-                    "FootballTrace",
-                    "UI_SUCCESS id=$loadId " +
-                        "matches=${matches.size}"
-                )
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 android.util.Log.e(
                     "FootballTrace",
                     "UI_TIMEOUT id=$loadId",
                     e
                 )
-                _uiState.update {
-                    it.copy(
-                        matches = emptyList(),
-                        scheduleError = "Football schedule request timed out."
-                    )
+                if (requestGeneration == scheduleGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            matches = emptyList(),
+                            scheduleError = "Football schedule request timed out."
+                        )
+                    }
                 }
             } catch (e: CancellationException) {
                 android.util.Log.d(
@@ -235,15 +280,20 @@ class FootballViewModel(
                     "UI_ERROR id=$loadId",
                     e
                 )
-                _uiState.update {
-                    it.copy(
-                        matches = emptyList(),
-                        scheduleError = "Could not load football schedule."
-                    )
+                if (requestGeneration == scheduleGeneration) {
+                    _uiState.update {
+                        it.copy(
+                            matches = emptyList(),
+                            scheduleError = "Could not load football schedule."
+                        )
+                    }
                 }
             } finally {
-                _uiState.update {
-                    it.copy(scheduleLoading = false)
+                if (requestGeneration == scheduleGeneration) {
+                    _uiState.update {
+                        it.copy(scheduleLoading = false)
+                    }
+                    activeScheduleKey = null
                 }
                 android.util.Log.d(
                     "FootballTrace",
@@ -257,40 +307,86 @@ class FootballViewModel(
         _uiState.update {
             it.copy(retryCount = it.retryCount + 1)
         }
-        loadSchedule(providerId)
+        loadSchedule(providerId, force = true)
     }
 
-    fun saveCompetitionSelection(selectedKeys: Set<String>, providerId: String) {
+    private fun cancelScheduleRequest(clearLoading: Boolean) {
+        scheduleGeneration++
+        activeScheduleJob?.cancel()
+        activeScheduleJob = null
+        activeScheduleKey = null
+        if (clearLoading) {
+            _uiState.update {
+                it.copy(scheduleLoading = false)
+            }
+        }
+    }
+
+    private fun cancelCompetitionRequest(clearLoading: Boolean) {
+        competitionGeneration++
+        activeCompetitionJob?.cancel()
+        activeCompetitionJob = null
+        activeCompetitionProviderId = null
+        if (clearLoading) {
+            _uiState.update {
+                it.copy(competitionsLoading = false)
+            }
+        }
+    }
+
+    fun saveInitialSetupSelection(selectedKeys: Set<String>, providerId: String) {
         val normalized = selectedKeys.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         if (normalized.isEmpty()) {
             return
         }
 
-        repository.footballPrefs.showFootballScheduleOnHome = true
-        repository.footballPrefs.selectedFootballCompetitionKeys = normalized.toList()
-        repository.footballPrefs.hasSeenFootballCompetitionSetup = true
+        dataSource.setSelectedCompetitionKeys(normalized.toList())
+        dataSource.setHasSeenSetup(true)
+        dataSource.setShowOnHome(true)
 
         _uiState.update { currentState ->
             currentState.copy(
                 selectedCompetitionKeys = normalized,
                 hasSeenSetup = true,
-                setupDialogVisible = false,
-                settingsDialogVisible = false,
-                showOnHome = true
+                showOnHome = true,
+                setupDialogVisible = false
             )
         }
 
-        loadSchedule(providerId)
+        if (isHomeVisible) {
+            loadSchedule(providerId, force = false)
+        }
+    }
+
+    fun saveSettingsSelection(selectedKeys: Set<String>, providerId: String) {
+        val normalized = selectedKeys.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        if (normalized.isEmpty()) {
+            return
+        }
+
+        dataSource.setSelectedCompetitionKeys(normalized.toList())
+        val currentShowOnHome = dataSource.getShowOnHome()
+
+        _uiState.update { currentState ->
+            currentState.copy(
+                selectedCompetitionKeys = normalized,
+                settingsDialogVisible = false
+            )
+        }
+
+        if (isHomeVisible && currentShowOnHome) {
+            loadSchedule(providerId, force = false)
+        }
     }
 
     fun setShowOnHome(enabled: Boolean, providerId: String) {
-        repository.footballPrefs.showFootballScheduleOnHome = enabled
+        dataSource.setShowOnHome(enabled)
         _uiState.update { currentState ->
             currentState.copy(
                 showOnHome = enabled
             )
         }
-        loadSchedule(providerId)
+        onScheduleCriteriaChanged(providerId)
     }
 
     fun openSetupDialog() {
@@ -303,10 +399,10 @@ class FootballViewModel(
     }
 
     fun closeSetupDialog() {
-        val hasSeenSetup = repository.footballPrefs.hasSeenFootballCompetitionSetup
+        val hasSeenSetup = dataSource.hasSeenSetup()
         if (!hasSeenSetup) {
-            repository.footballPrefs.showFootballScheduleOnHome = false
-            repository.footballPrefs.hasSeenFootballCompetitionSetup = true
+            dataSource.setShowOnHome(false)
+            dataSource.setHasSeenSetup(true)
             _uiState.update { currentState ->
                 currentState.copy(
                     hasSeenSetup = true,
@@ -367,7 +463,7 @@ class FootballViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        activeCompetitionJob?.cancel()
-        activeScheduleJob?.cancel()
+        cancelCompetitionRequest(clearLoading = true)
+        cancelScheduleRequest(clearLoading = true)
     }
 }

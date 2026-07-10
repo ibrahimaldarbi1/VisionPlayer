@@ -55,6 +55,9 @@ import com.example.ui.feature.series.SeriesDetailsDialog
 import com.example.ui.feature.multiview.MultiViewPlayerScreen
 import com.example.ui.feature.multiview.MultiViewSetupView
 import com.example.ui.feature.football.FootballConfigDialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -108,16 +111,37 @@ fun HomeScreen(
     val continueWatching by repository.continueWatching.collectAsState(initial = emptyList())
     val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
 
-    // Football states
-    var footballMatches by remember { mutableStateOf<List<FootballWatchMatch>>(emptyList()) }
-    var isLoadingFootball by remember { mutableStateOf(false) }
-    var footballLoadError by remember { mutableStateOf<String?>(null) }
-    var footballRetryCount by remember { mutableStateOf(0) }
-    var showFootballSetupDialog by remember { mutableStateOf(false) }
-    var showFootballSettingsDialog by remember { mutableStateOf(false) }
+    // Football ViewModel & States
+    val footballViewModel: com.example.ui.feature.football.FootballViewModel = viewModel(
+        factory = com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.football.FootballViewModel(repository)
+        }
+    )
+    val footballState by footballViewModel.uiState.collectAsStateWithLifecycle()
 
-    var selectedFootballCompetitionKeys by remember {
-        mutableStateOf(repository.footballPrefs.selectedFootballCompetitionKeys)
+    // 1. Profile initialization/change
+    LaunchedEffect(profile) {
+        footballViewModel.onProfileChanged(profile)
+        footballViewModel.initialize(profile)
+    }
+
+    // 2. Home visibility
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(activeTab, profile.providerId, lifecycleOwner) {
+        if (activeTab == "HOME") {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                footballViewModel.loadSchedule(profile.providerId)
+            }
+        }
+    }
+
+    // 3. Selected-key change
+    LaunchedEffect(footballState.selectedCompetitionKeys, footballState.showOnHome, footballState.retryCount, profile.providerId, lifecycleOwner) {
+        if (activeTab == "HOME") {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                footballViewModel.loadSchedule(profile.providerId)
+            }
+        }
     }
 
     // Multi-view states
@@ -135,105 +159,6 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(activeTab, profile.features.footballScheduleEnabled) {
-        if (activeTab == "HOME" && profile.features.footballScheduleEnabled && !repository.footballPrefs.hasSeenFootballCompetitionSetup) {
-            showFootballSetupDialog = true
-        }
-    }
-
-    LaunchedEffect(
-        activeTab,
-        selectedFootballCompetitionKeys,
-        repository.footballPrefs.showFootballScheduleOnHome,
-        profile.features.footballScheduleEnabled,
-        footballRetryCount
-    ) {
-        if (
-            activeTab == "HOME" &&
-            profile.features.footballScheduleEnabled &&
-            repository.footballPrefs.showFootballScheduleOnHome &&
-            selectedFootballCompetitionKeys.isNotEmpty()
-        ) {
-            val loadId =
-                SystemClock.elapsedRealtime()
-
-            android.util.Log.d(
-                "FootballTrace",
-                "UI_START id=$loadId " +
-                    "competitions=${selectedFootballCompetitionKeys.size} " +
-                    "retry=$footballRetryCount"
-            )
-
-            isLoadingFootball = true
-            footballLoadError = null
-
-            try {
-                footballMatches =
-                    repository.getFootballSchedule(
-                        providerId =
-                            profile.providerId,
-
-                        selectedCompetitionKeys =
-                            selectedFootballCompetitionKeys
-                    )
-
-                android.util.Log.d(
-                    "FootballTrace",
-                    "UI_SUCCESS id=$loadId " +
-                        "matches=${footballMatches.size}"
-                )
-            } catch (
-                e: TimeoutCancellationException
-            ) {
-                android.util.Log.e(
-                    "FootballTrace",
-                    "UI_TIMEOUT id=$loadId",
-                    e
-                )
-
-                footballMatches =
-                    emptyList()
-
-                footballLoadError =
-                    "Football schedule request timed out."
-            } catch (
-                e: CancellationException
-            ) {
-                android.util.Log.d(
-                    "FootballTrace",
-                    "UI_CANCELLED id=$loadId"
-                )
-
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.e(
-                    "FootballTrace",
-                    "UI_ERROR id=$loadId",
-                    e
-                )
-
-                footballMatches =
-                    emptyList()
-
-                footballLoadError =
-                    "Could not load football schedule."
-            } finally {
-                isLoadingFootball = false
-
-                android.util.Log.d(
-                    "FootballTrace",
-                    "UI_FINALLY id=$loadId " +
-                        "loading=$isLoadingFootball"
-                )
-            }
-        } else {
-            footballMatches = emptyList()
-            footballLoadError = null
-            isLoadingFootball = false
-        }
-    }
-
-    // UI Local lists
     var liveChannels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
     var moviesList by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var seriesList by remember { mutableStateOf<List<Series>>(emptyList()) }
@@ -386,12 +311,13 @@ fun HomeScreen(
                         onTabSelected = { activeTab = it },
                         onToggleFavorite = toggleFavorite,
                         homeUiState = homeUiState,
-                        footballMatches = footballMatches,
-                        isLoadingFootball = isLoadingFootball,
-                        footballLoadError = footballLoadError,
-                        selectedFootballCompetitionKeys = selectedFootballCompetitionKeys,
-                        onRetryFootball = { footballRetryCount++ },
-                        onConfigureFootball = { showFootballSettingsDialog = true },
+                        footballMatches = footballState.matches,
+                        isLoadingFootball = footballState.scheduleLoading,
+                        footballLoadError = footballState.scheduleError,
+                        selectedFootballCompetitionKeys = footballState.selectedCompetitionKeys.toList(),
+                        onRetryFootball = { footballViewModel.retrySchedule(profile.providerId) },
+                        onConfigureFootball = { footballViewModel.openSettingsDialog() },
+                        showFootballScheduleOnHome = footballState.showOnHome,
                         onAddToMultiView = { channel ->
                             if (pendingMultiViewChannels.none { it.id == channel.id }) {
                                 pendingMultiViewChannels = pendingMultiViewChannels + channel
@@ -531,8 +457,8 @@ fun HomeScreen(
                         onNavigateToParental = onNavigateToParental,
                         onLogout = onLogout,
                         isTv = isTv,
-                        selectedFootballCompetitionCount = selectedFootballCompetitionKeys.size,
-                        onConfigureFootball = { showFootballSettingsDialog = true }
+                        selectedFootballCompetitionCount = footballState.selectedCompetitionKeys.size,
+                        onConfigureFootball = { footballViewModel.openSettingsDialog() }
                     )
                 }
             }
@@ -558,25 +484,57 @@ fun HomeScreen(
         )
     }
 
-    if (showFootballSetupDialog) {
+    if (footballState.setupDialogVisible) {
         FootballConfigDialog(
-            onDismiss = { showFootballSetupDialog = false },
+            onDismiss = { footballViewModel.closeSetupDialog() },
             profile = profile,
-            repository = repository,
-            onSelectionSaved = { newKeys ->
-                selectedFootballCompetitionKeys = newKeys
-            }
+            competitions = footballState.competitions,
+            selectedKeys = footballState.draftCompetitionKeys,
+            isLoading = footballState.competitionsLoading,
+            errorMessage = footballState.competitionsError,
+            onToggleCompetition = footballViewModel::selectCompetition,
+            onSelectAll = footballViewModel::selectAllCompetitions,
+            onClearAll = footballViewModel::clearCompetitionSelection,
+            onRetry = {
+                footballViewModel.loadCompetitions(
+                    profile.providerId,
+                    forceRefresh = true
+                )
+            },
+            onSave = {
+                footballViewModel.saveCompetitionSelection(
+                    footballState.draftCompetitionKeys,
+                    profile.providerId
+                )
+            },
+            hasSeenSetup = footballState.hasSeenSetup
         )
     }
 
-    if (showFootballSettingsDialog) {
+    if (footballState.settingsDialogVisible) {
         FootballConfigDialog(
-            onDismiss = { showFootballSettingsDialog = false },
+            onDismiss = { footballViewModel.closeSettingsDialog() },
             profile = profile,
-            repository = repository,
-            onSelectionSaved = { newKeys ->
-                selectedFootballCompetitionKeys = newKeys
-            }
+            competitions = footballState.competitions,
+            selectedKeys = footballState.draftCompetitionKeys,
+            isLoading = footballState.competitionsLoading,
+            errorMessage = footballState.competitionsError,
+            onToggleCompetition = footballViewModel::selectCompetition,
+            onSelectAll = footballViewModel::selectAllCompetitions,
+            onClearAll = footballViewModel::clearCompetitionSelection,
+            onRetry = {
+                footballViewModel.loadCompetitions(
+                    profile.providerId,
+                    forceRefresh = true
+                )
+            },
+            onSave = {
+                footballViewModel.saveCompetitionSelection(
+                    footballState.draftCompetitionKeys,
+                    profile.providerId
+                )
+            },
+            hasSeenSetup = footballState.hasSeenSetup
         )
     }
 }

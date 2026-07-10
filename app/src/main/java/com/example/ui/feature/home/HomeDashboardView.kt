@@ -48,7 +48,8 @@ fun HomeDashboardView(
     selectedFootballCompetitionKeys: List<String> = emptyList(),
     onRetryFootball: () -> Unit = {},
     onConfigureFootball: () -> Unit = {},
-    onAddToMultiView: ((LiveChannel) -> Unit)? = null
+    onAddToMultiView: ((LiveChannel) -> Unit)? = null,
+    showFootballScheduleOnHome: Boolean = true
 ) {
     val filteredFavorites = favorites.filter { fav ->
         when (fav.contentType) {
@@ -178,7 +179,7 @@ fun HomeDashboardView(
         // --- FOOTBALL SCHEDULE ROW (Only if showFootballScheduleOnHome is true) ---
         val showFootballRow = com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(
             featureEnabled = profile.features.footballScheduleEnabled,
-            userEnabled = repository.footballPrefs.showFootballScheduleOnHome
+            userEnabled = showFootballScheduleOnHome
         )
         val hasSelection = selectedFootballCompetitionKeys.isNotEmpty()
 

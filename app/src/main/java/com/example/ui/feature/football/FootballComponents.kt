@@ -329,46 +329,17 @@ fun FootballMatchCard(
 fun FootballConfigDialog(
     onDismiss: () -> Unit,
     profile: com.example.config.ProviderProfile,
-    repository: IptvRepository,
-    onSelectionSaved: (List<String>) -> Unit
+    competitions: List<FootballCompetitionPreference>,
+    selectedKeys: Set<String>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onToggleCompetition: (String) -> Unit,
+    onSelectAll: () -> Unit,
+    onClearAll: () -> Unit,
+    onRetry: () -> Unit,
+    onSave: () -> Unit,
+    hasSeenSetup: Boolean
 ) {
-    var competitions by remember {
-        mutableStateOf<List<FootballCompetitionPreference>>(
-            repository.footballPrefs.getCachedCompetitions()
-        )
-    }
-    var selectedKeys by remember {
-        mutableStateOf(
-            repository.footballPrefs.selectedFootballCompetitionKeys.toSet()
-        )
-    }
-    var isLoadingCompetitions by remember { mutableStateOf(competitions.isEmpty()) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var retryTrigger by remember { mutableStateOf(0) }
-
-    LaunchedEffect(retryTrigger) {
-        isLoadingCompetitions = competitions.isEmpty()
-        errorMessage = null
-        try {
-            val freshComps = repository.getFootballCompetitions(profile.providerId, forceRefresh = true)
-            if (freshComps.isNotEmpty()) {
-                competitions = freshComps
-            } else if (competitions.isEmpty()) {
-                errorMessage = "Could not load football competitions."
-            }
-        } catch (
-            e: CancellationException
-        ) {
-            throw e
-        } catch (e: Exception) {
-            if (competitions.isEmpty()) {
-                errorMessage = "Could not load football competitions."
-            }
-        } finally {
-            isLoadingCompetitions = false
-        }
-    }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -392,7 +363,7 @@ fun FootballConfigDialog(
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
 
-                if (isLoadingCompetitions) {
+                if (isLoading) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -410,15 +381,13 @@ fun FootballConfigDialog(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = errorMessage ?: "Error occurred",
+                                text = errorMessage,
                                 color = Color.Red,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(bottom = 12.dp)
                             )
                             Button(
-                                onClick = {
-                                    retryTrigger++
-                                },
+                                onClick = onRetry,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
                             ) {
                                 Text("Retry", color = Color.White)
@@ -434,13 +403,13 @@ fun FootballConfigDialog(
                                 .padding(bottom = 8.dp)
                         ) {
                             TextButton(
-                                onClick = { selectedKeys = competitions.map { it.competitionKey }.toSet() },
+                                onClick = onSelectAll,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text("Select All", color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
                             }
                             TextButton(
-                                onClick = { selectedKeys = emptySet() },
+                                onClick = onClearAll,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Text("Clear All", color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
@@ -465,11 +434,7 @@ fun FootballConfigDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            selectedKeys = if (isChecked) {
-                                                selectedKeys - comp.competitionKey
-                                            } else {
-                                                selectedKeys + comp.competitionKey
-                                            }
+                                            onToggleCompetition(comp.competitionKey)
                                         }
                                         .padding(vertical = 6.dp)
                                 ) {
@@ -491,15 +456,9 @@ fun FootballConfigDialog(
             }
         },
         confirmButton = {
-            val isEnabled = selectedKeys.isNotEmpty() && !isLoadingCompetitions && errorMessage == null
+            val isEnabled = selectedKeys.isNotEmpty() && !isLoading && errorMessage == null
             Button(
-                onClick = {
-                    repository.footballPrefs.showFootballScheduleOnHome = true
-                    repository.footballPrefs.selectedFootballCompetitionKeys = selectedKeys.toList()
-                    repository.footballPrefs.hasSeenFootballCompetitionSetup = true
-                    onSelectionSaved(selectedKeys.toList())
-                    onDismiss()
-                },
+                onClick = onSave,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
                 enabled = isEnabled
             ) {
@@ -508,17 +467,10 @@ fun FootballConfigDialog(
         },
         dismissButton = {
             TextButton(
-                onClick = {
-                    if (!repository.footballPrefs.hasSeenFootballCompetitionSetup) {
-                        repository.footballPrefs.showFootballScheduleOnHome = false
-                        repository.footballPrefs.hasSeenFootballCompetitionSetup = true
-                        onSelectionSaved(emptyList())
-                    }
-                    onDismiss()
-                }
+                onClick = onDismiss
             ) {
                 Text(
-                    text = if (!repository.footballPrefs.hasSeenFootballCompetitionSetup) "Not Now" else "Cancel",
+                    text = if (!hasSeenSetup) "Not Now" else "Cancel",
                     color = Color.Gray
                 )
             }

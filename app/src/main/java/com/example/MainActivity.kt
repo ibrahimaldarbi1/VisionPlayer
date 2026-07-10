@@ -39,9 +39,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
-        // Initialize local Room Database
-        val database = IptvDatabase.getDatabase(this)
-        val repository = IptvRepository(database.iptvDao(), this)
+        val container = (application as VisionPlayerApplication).appContainer
+        val repository = container.repository
 
         setContent {
             val currentProfile = ProviderConfigRegistry.currentProfile

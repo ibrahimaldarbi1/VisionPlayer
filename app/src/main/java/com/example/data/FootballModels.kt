@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
@@ -11,34 +12,22 @@ import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.TimeUnit
 
 // --- 1. Models ---
 
 @JsonClass(generateAdapter = true)
-data class FootballCompetition(
-    @Json(name = "competitionCode") val competitionCode: String,
-    @Json(name = "name") val name: String,
-    @Json(name = "country") val country: String?,
-    @Json(name = "type") val type: String?,
-    @Json(name = "emblemUrl") val emblemUrl: String?
+data class FootballCompetitionPreference(
+    @Json(name = "competitionKey") val competitionKey: String,
+    @Json(name = "name") val name: String
 )
 
 @JsonClass(generateAdapter = true)
-data class FootballTeam(
-    @Json(name = "teamId") val teamId: Int,
-    @Json(name = "name") val name: String,
-    @Json(name = "shortName") val shortName: String?,
-    @Json(name = "tla") val tla: String?,
-    @Json(name = "crestUrl") val crestUrl: String?,
-    @Json(name = "competitionCodes") val competitionCodes: List<String>?
-)
-
-@JsonClass(generateAdapter = true)
-data class FootballOptionsResponse(
+data class FootballCompetitionsResponse(
     @Json(name = "providerId") val providerId: String?,
     @Json(name = "enabled") val enabled: Boolean?,
-    @Json(name = "competitions") val competitions: List<FootballCompetition>?,
-    @Json(name = "teams") val teams: List<FootballTeam>?
+    @Json(name = "country") val country: String?,
+    @Json(name = "competitions") val competitions: List<FootballCompetitionPreference>?
 )
 
 @JsonClass(generateAdapter = true)
@@ -83,60 +72,6 @@ data class FootballWatchMatch(
     val confidence: String // "STRONG", "MEDIUM", "NONE"
 )
 
-@JsonClass(generateAdapter = true)
-data class FootballWatchScheduleResponse(
-    @Json(name = "providerId") val providerId: String?,
-    @Json(name = "enabled") val enabled: Boolean?,
-    @Json(name = "source") val source: String?,
-    @Json(name = "country") val country: String?,
-    @Json(name = "range") val range: FootballRange?,
-    @Json(name = "matches") val matches: List<FootballBroadcastMatch>?
-)
-
-@JsonClass(generateAdapter = true)
-data class FootballBroadcastMatch(
-    @Json(name = "matchId") val matchId: Int,
-    @Json(name = "competitionCode") val competitionCode: String?,
-    @Json(name = "competitionName") val competitionName: String?,
-    @Json(name = "competitionEmblemUrl") val competitionEmblemUrl: String?,
-    @Json(name = "kickoffUtc") val kickoffUtc: String?,
-    @Json(name = "status") val status: String?,
-    @Json(name = "matchday") val matchday: Int?,
-    @Json(name = "stage") val stage: String?,
-    @Json(name = "homeTeamId") val homeTeamId: Int?,
-    @Json(name = "homeTeamName") val homeTeamName: String?,
-    @Json(name = "homeTeamCrestUrl") val homeTeamCrestUrl: String?,
-    @Json(name = "awayTeamId") val awayTeamId: Int?,
-    @Json(name = "awayTeamName") val awayTeamName: String?,
-    @Json(name = "awayTeamCrestUrl") val awayTeamCrestUrl: String?,
-    @Json(name = "homeScore") val homeScore: Int?,
-    @Json(name = "awayScore") val awayScore: Int?,
-    @Json(name = "beinChannelName") val beinChannelName: String?,
-    @Json(name = "beinChannelNumber") val beinChannelNumber: String?,
-    @Json(name = "broadcastMatched") val broadcastMatched: Boolean?
-)
-
-fun FootballBroadcastMatch.toFootballMatch(): FootballMatch {
-    return FootballMatch(
-        matchId = matchId,
-        competitionCode = competitionCode,
-        competitionName = competitionName,
-        competitionEmblemUrl = competitionEmblemUrl,
-        kickoffUtc = kickoffUtc,
-        status = status,
-        matchday = matchday,
-        stage = stage,
-        homeTeamId = homeTeamId,
-        homeTeamName = homeTeamName,
-        homeTeamCrestUrl = homeTeamCrestUrl,
-        awayTeamId = awayTeamId,
-        awayTeamName = awayTeamName,
-        awayTeamCrestUrl = awayTeamCrestUrl,
-        homeScore = homeScore,
-        awayScore = awayScore
-    )
-}
-
 // --- 2. SharedPreferences Storage ---
 
 class FootballPrefs(context: Context) {
@@ -146,17 +81,69 @@ class FootballPrefs(context: Context) {
         get() = prefs.getBoolean("show_football_schedule", true)
         set(value) = prefs.edit().putBoolean("show_football_schedule", value).apply()
 
-    var hasSeenFootballSetup: Boolean
-        get() = prefs.getBoolean("has_seen_football_setup", false)
-        set(value) = prefs.edit().putBoolean("has_seen_football_setup", value).apply()
+    var selectedFootballCompetitionKeys: List<String>
+        get() = prefs.getString("selected_competition_keys_v2", "")
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+            ?: emptyList()
+        set(value) = prefs.edit()
+            .putString(
+                "selected_competition_keys_v2",
+                value
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                    .joinToString(",")
+            )
+            .apply()
 
-    var selectedFootballCompetitionCodes: List<String>
-        get() = prefs.getString("selected_competitions", "")?.split(",")?.filter { it.isNotEmpty() } ?: emptyList()
-        set(value) = prefs.edit().putString("selected_competitions", value.joinToString(",")).apply()
+    var hasSeenFootballCompetitionSetup: Boolean
+        get() = prefs.getBoolean("has_seen_football_competition_setup_v2", false)
+        set(value) = prefs.edit().putBoolean("has_seen_football_competition_setup_v2", value).apply()
 
-    var selectedFootballTeamIds: List<Int>
-        get() = prefs.getString("selected_teams", "")?.split(",")?.filter { it.isNotEmpty() }?.mapNotNull { it.toIntOrNull() } ?: emptyList()
-        set(value) = prefs.edit().putString("selected_teams", value.joinToString(",")).apply()
+    fun saveCachedCompetitions(competitions: List<FootballCompetitionPreference>) {
+        try {
+            val array = org.json.JSONArray()
+            for (comp in competitions) {
+                val obj = org.json.JSONObject()
+                obj.put("competitionKey", comp.competitionKey)
+                obj.put("name", comp.name)
+                array.put(obj)
+            }
+            prefs.edit()
+                .putString("cached_football_competitions_v1", array.toString())
+                .putLong("cached_football_competitions_updated_at_v1", System.currentTimeMillis())
+                .apply()
+        } catch (e: Exception) {
+            android.util.Log.e("FootballPrefs", "Failed to save cached competitions", e)
+        }
+    }
+
+    fun getCachedCompetitions(): List<FootballCompetitionPreference> {
+        val jsonStr = prefs.getString("cached_football_competitions_v1", null) ?: return emptyList()
+        try {
+            val array = org.json.JSONArray(jsonStr)
+            val list = mutableListOf<FootballCompetitionPreference>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val key = obj.optString("competitionKey") ?: continue
+                val name = obj.optString("name") ?: continue
+                if (key.isNotEmpty() && name.isNotEmpty()) {
+                    list.add(FootballCompetitionPreference(key, name))
+                }
+            }
+            return list
+        } catch (e: Exception) {
+            android.util.Log.e("FootballPrefs", "Failed to parse cached competitions", e)
+            return emptyList()
+        }
+    }
+
+    var cachedCompetitionsUpdatedAt: Long
+        get() = prefs.getLong("cached_football_competitions_updated_at_v1", 0L)
+        set(value) = prefs.edit().putLong("cached_football_competitions_updated_at_v1", value).apply()
 }
 
 // --- 3. Normalization and Matching Utilities ---
@@ -339,13 +326,18 @@ data class BeinFootballScheduleResponse(
 @JsonClass(generateAdapter = true)
 data class BeinFootballMatch(
     @Json(name = "id") val id: String?,
+    @Json(name = "sourceMatchId") val sourceMatchId: String?,
     @Json(name = "title") val title: String?,
+    @Json(name = "competitionKey") val competitionKey: String?,
     @Json(name = "competitionName") val competitionName: String?,
+    @Json(name = "homeTeamName") val homeTeamName: String?,
+    @Json(name = "awayTeamName") val awayTeamName: String?,
     @Json(name = "kickoffUtc") val kickoffUtc: String?,
     @Json(name = "endUtc") val endUtc: String?,
     @Json(name = "status") val status: String?,
     @Json(name = "channelName") val channelName: String?,
-    @Json(name = "channelNumber") val channelNumber: String?
+    @Json(name = "channelNumber") val channelNumber: String?,
+    @Json(name = "channelCode") val channelCode: String?
 )
 
 fun extractHomeTeamFromTitle(title: String?): String? {
@@ -378,8 +370,11 @@ fun extractAwayTeamFromTitle(title: String?): String? {
 
 fun BeinFootballMatch.toFootballMatchCompat(): FootballMatch {
     return FootballMatch(
-        matchId = id?.hashCode() ?: title?.hashCode() ?: 0,
-        competitionCode = null,
+        matchId = sourceMatchId?.hashCode()
+            ?: id?.hashCode()
+            ?: title?.hashCode()
+            ?: 0,
+        competitionCode = competitionKey,
         competitionName = competitionName,
         competitionEmblemUrl = null,
         kickoffUtc = kickoffUtc,
@@ -387,10 +382,10 @@ fun BeinFootballMatch.toFootballMatchCompat(): FootballMatch {
         matchday = null,
         stage = null,
         homeTeamId = null,
-        homeTeamName = extractHomeTeamFromTitle(title),
+        homeTeamName = homeTeamName ?: extractHomeTeamFromTitle(title),
         homeTeamCrestUrl = null,
         awayTeamId = null,
-        awayTeamName = extractAwayTeamFromTitle(title),
+        awayTeamName = awayTeamName ?: extractAwayTeamFromTitle(title),
         awayTeamCrestUrl = null,
         homeScore = null,
         awayScore = null
@@ -398,66 +393,48 @@ fun BeinFootballMatch.toFootballMatchCompat(): FootballMatch {
 }
 
 interface FootballApiService {
-    @GET("api/v1/football/options")
-    suspend fun getFootballOptions(
-        @Query("provider_id") providerId: String
-    ): FootballOptionsResponse
-
-    @GET("api/v1/football/schedule")
-    suspend fun getFootballSchedule(
+    @GET("api/v1/football/competitions")
+    suspend fun getFootballCompetitions(
         @Query("provider_id") providerId: String,
-        @Query("competition_codes") competitionCodes: String?,
-        @Query("team_ids") teamIds: String?
-    ): FootballScheduleResponse
+        @Query("country") country: String
+    ): FootballCompetitionsResponse
 
     @GET("api/v1/football/bein-schedule")
     suspend fun getBeinFootballSchedule(
         @Query("provider_id") providerId: String,
-        @Query("country") country: String
+        @Query("country") country: String,
+        @Query("competition_keys") competitionKeys: String?
     ): BeinFootballScheduleResponse
-
-    @GET("api/v1/football/watch-schedule")
-    suspend fun getFootballWatchSchedule(
-        @Query("provider_id") providerId: String,
-        @Query("competition_codes") competitionCodes: String?,
-        @Query("team_ids") teamIds: String?,
-        @Query("country") country: String
-    ): FootballWatchScheduleResponse
 }
 
 open class FootballApiClient(private val baseUrl: String) {
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
+        .build()
+
     private val retrofit = Retrofit.Builder()
         .baseUrl(baseUrl.removeSuffix("/") + "/")
+        .client(okHttpClient)
         .addConverterFactory(MoshiConverterFactory.create())
         .build()
 
     val service: FootballApiService = retrofit.create(FootballApiService::class.java)
 
-    open suspend fun getFootballOptions(providerId: String): FootballOptionsResponse {
-        return service.getFootballOptions(providerId)
-    }
-
-    open suspend fun getFootballSchedule(
+    open suspend fun getFootballCompetitions(
         providerId: String,
-        competitionCodes: String?,
-        teamIds: String?
-    ): FootballScheduleResponse {
-        return service.getFootballSchedule(providerId, competitionCodes, teamIds)
+        country: String
+    ): FootballCompetitionsResponse {
+        return service.getFootballCompetitions(providerId, country)
     }
 
     open suspend fun getBeinFootballSchedule(
         providerId: String,
-        country: String
+        country: String,
+        competitionKeys: String?
     ): BeinFootballScheduleResponse {
-        return service.getBeinFootballSchedule(providerId, country)
-    }
-
-    open suspend fun getFootballWatchSchedule(
-        providerId: String,
-        competitionCodes: String?,
-        teamIds: String?,
-        country: String
-    ): FootballWatchScheduleResponse {
-        return service.getFootballWatchSchedule(providerId, competitionCodes, teamIds, country)
+        return service.getBeinFootballSchedule(providerId, country, competitionKeys)
     }
 }

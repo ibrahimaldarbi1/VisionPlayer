@@ -96,8 +96,14 @@ fun HomeScreen(
     // Football states
     var footballMatches by remember { mutableStateOf<List<FootballWatchMatch>>(emptyList()) }
     var isLoadingFootball by remember { mutableStateOf(false) }
+    var footballLoadError by remember { mutableStateOf<String?>(null) }
+    var footballRetryCount by remember { mutableStateOf(0) }
     var showFootballSetupDialog by remember { mutableStateOf(false) }
     var showFootballSettingsDialog by remember { mutableStateOf(false) }
+
+    var selectedFootballCompetitionKeys by remember {
+        mutableStateOf(repository.footballPrefs.selectedFootballCompetitionKeys)
+    }
 
     // Multi-view states
     var activeMultiViewChannels by remember { mutableStateOf<List<LiveChannel>?>(null) }
@@ -115,48 +121,51 @@ fun HomeScreen(
     }
 
     LaunchedEffect(activeTab) {
-        if (activeTab == "HOME" && !repository.footballPrefs.hasSeenFootballSetup) {
+        if (activeTab == "HOME" && !repository.footballPrefs.hasSeenFootballCompetitionSetup) {
             showFootballSetupDialog = true
         }
     }
 
     LaunchedEffect(
         activeTab,
+        selectedFootballCompetitionKeys,
         repository.footballPrefs.showFootballScheduleOnHome,
-        repository.footballPrefs.selectedFootballCompetitionCodes,
-        repository.footballPrefs.selectedFootballTeamIds,
-        profile.features.footballScheduleEnabled
+        profile.features.footballScheduleEnabled,
+        footballRetryCount
     ) {
         if (
             activeTab == "HOME" &&
+            profile.features.footballScheduleEnabled &&
             repository.footballPrefs.showFootballScheduleOnHome &&
-            profile.features.footballScheduleEnabled
+            selectedFootballCompetitionKeys.isNotEmpty()
         ) {
-            val codes = repository.footballPrefs.selectedFootballCompetitionCodes
-            val ids = repository.footballPrefs.selectedFootballTeamIds
+            isLoadingFootball = true
+            footballLoadError = null
 
-            if (codes.isNotEmpty() || ids.isNotEmpty()) {
-                isLoadingFootball = true
-                try {
-                    footballMatches = withTimeoutOrNull(20000) {
-                        repository.getFootballSchedule(
-                            providerId = profile.providerId,
-                            selectedCompetitionCodes = codes,
-                            selectedTeamIds = ids
-                        )
-                    }.orEmpty()
-                } catch (e: Exception) {
-                    android.util.Log.e("HomeScreen", "Failed to load football watch schedule.", e)
-                    footballMatches = emptyList()
-                } finally {
-                    isLoadingFootball = false
+            try {
+                val result = withTimeoutOrNull(20000) {
+                    repository.getFootballSchedule(
+                        providerId = profile.providerId,
+                        selectedCompetitionKeys = selectedFootballCompetitionKeys
+                    )
                 }
-            } else {
+
+                if (result == null) {
+                    footballMatches = emptyList()
+                    footballLoadError = "Football schedule request timed out."
+                } else {
+                    footballMatches = result
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("HomeScreen", "Failed to load football schedule.", e)
                 footballMatches = emptyList()
+                footballLoadError = "Could not load football schedule."
+            } finally {
                 isLoadingFootball = false
             }
         } else {
             footballMatches = emptyList()
+            footballLoadError = null
             isLoadingFootball = false
         }
     }
@@ -316,6 +325,10 @@ fun HomeScreen(
                         homeUiState = homeUiState,
                         footballMatches = footballMatches,
                         isLoadingFootball = isLoadingFootball,
+                        footballLoadError = footballLoadError,
+                        selectedFootballCompetitionKeys = selectedFootballCompetitionKeys,
+                        onRetryFootball = { footballRetryCount++ },
+                        onConfigureFootball = { showFootballSettingsDialog = true },
                         onAddToMultiView = { channel ->
                             if (pendingMultiViewChannels.none { it.id == channel.id }) {
                                 pendingMultiViewChannels = pendingMultiViewChannels + channel
@@ -486,7 +499,9 @@ fun HomeScreen(
             onDismiss = { showFootballSetupDialog = false },
             profile = profile,
             repository = repository,
-            isFirstLaunch = true
+            onSelectionSaved = { newKeys ->
+                selectedFootballCompetitionKeys = newKeys
+            }
         )
     }
 
@@ -495,7 +510,9 @@ fun HomeScreen(
             onDismiss = { showFootballSettingsDialog = false },
             profile = profile,
             repository = repository,
-            isFirstLaunch = false
+            onSelectionSaved = { newKeys ->
+                selectedFootballCompetitionKeys = newKeys
+            }
         )
     }
 }
@@ -743,6 +760,10 @@ fun HomeDashboardView(
     onTmdbItemClick: (HomeItem) -> Unit = {},
     footballMatches: List<FootballWatchMatch> = emptyList(),
     isLoadingFootball: Boolean = false,
+    footballLoadError: String? = null,
+    selectedFootballCompetitionKeys: List<String> = emptyList(),
+    onRetryFootball: () -> Unit = {},
+    onConfigureFootball: () -> Unit = {},
     onAddToMultiView: ((LiveChannel) -> Unit)? = null
 ) {
     val hasLocalContent = recentlyWatched.isNotEmpty() || continueWatching.isNotEmpty() || favorites.isNotEmpty()
@@ -840,12 +861,11 @@ fun HomeDashboardView(
             }
         }
 
-        // --- FOOTBALL SCHEDULE ROW (Only if showFootballScheduleOnHome is true and selected are not empty) ---
+        // --- FOOTBALL SCHEDULE ROW (Only if showFootballScheduleOnHome is true) ---
         val showFootballRow = repository.footballPrefs.showFootballScheduleOnHome
-        val hasSelection = repository.footballPrefs.selectedFootballCompetitionCodes.isNotEmpty() ||
-                repository.footballPrefs.selectedFootballTeamIds.isNotEmpty()
+        val hasSelection = selectedFootballCompetitionKeys.isNotEmpty()
 
-        if (showFootballRow && hasSelection) {
+        if (showFootballRow) {
             item {
                 Column {
                     Text(
@@ -855,8 +875,24 @@ fun HomeDashboardView(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    
-                    if (isLoadingFootball) {
+
+                    if (!hasSelection) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(profile.branding.surfaceColor), RoundedCornerShape(12.dp))
+                                .clickable { onConfigureFootball() }
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Choose football competitions",
+                                color = Color(profile.branding.primaryColor),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else if (isLoadingFootball) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -864,6 +900,29 @@ fun HomeDashboardView(
                             contentAlignment = Alignment.Center
                         ) {
                             CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+                        }
+                    } else if (footballLoadError != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(profile.branding.surfaceColor), RoundedCornerShape(12.dp))
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = footballLoadError ?: "Failed to load football schedule.",
+                                    color = Color.Red,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                Button(
+                                    onClick = onRetryFootball,
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
+                                ) {
+                                    Text("Retry", color = Color.White)
+                                }
+                            }
                         }
                     } else if (footballMatches.isEmpty()) {
                         Box(
@@ -874,7 +933,7 @@ fun HomeDashboardView(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No scheduled matches found for your selected leagues/teams.",
+                                text = "No scheduled matches found for your selected competitions.",
                                 color = Color.Gray,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -3217,36 +3276,38 @@ fun FootballConfigDialog(
     onDismiss: () -> Unit,
     profile: com.example.config.ProviderProfile,
     repository: IptvRepository,
-    isFirstLaunch: Boolean = false
+    onSelectionSaved: (List<String>) -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var step by remember { mutableStateOf(if (isFirstLaunch) 1 else 2) }
-    
-    var showFootballRow by remember { mutableStateOf(repository.footballPrefs.showFootballScheduleOnHome) }
-    var footballOptions by remember { mutableStateOf<FootballOptionsResponse?>(null) }
-    var isLoadingOptions by remember { mutableStateOf(false) }
+    var competitions by remember {
+        mutableStateOf<List<FootballCompetitionPreference>>(
+            repository.footballPrefs.getCachedCompetitions()
+        )
+    }
+    var selectedKeys by remember {
+        mutableStateOf(
+            repository.footballPrefs.selectedFootballCompetitionKeys.toSet()
+        )
+    }
+    var isLoadingCompetitions by remember { mutableStateOf(competitions.isEmpty()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var retryTrigger by remember { mutableStateOf(0) }
 
-    // Multi-select states
-    var selectedComps by remember { mutableStateOf(repository.footballPrefs.selectedFootballCompetitionCodes.toSet()) }
-    var selectedTeams by remember { mutableStateOf(repository.footballPrefs.selectedFootballTeamIds.toSet()) }
-
-    LaunchedEffect(step) {
-        if (step == 2 && footballOptions == null) {
-            isLoadingOptions = true
-            errorMessage = null
-            try {
-                val response = repository.getFootballOptions(profile.providerId)
-                if (response != null) {
-                    footballOptions = response
-                } else {
-                    errorMessage = "Failed to load options from football backend."
-                }
-            } catch (e: Exception) {
-                errorMessage = "Error loading options: ${e.message}"
-            } finally {
-                isLoadingOptions = false
+    LaunchedEffect(retryTrigger) {
+        isLoadingCompetitions = competitions.isEmpty()
+        errorMessage = null
+        try {
+            val freshComps = repository.getFootballCompetitions(profile.providerId, forceRefresh = true)
+            if (freshComps.isNotEmpty()) {
+                competitions = freshComps
+            } else if (competitions.isEmpty()) {
+                errorMessage = "Could not load football competitions."
             }
+        } catch (e: Exception) {
+            if (competitions.isEmpty()) {
+                errorMessage = "Could not load football competitions."
+            }
+        } finally {
+            isLoadingCompetitions = false
         }
     }
 
@@ -3254,7 +3315,7 @@ fun FootballConfigDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = if (isFirstLaunch) "Football Live Schedule" else "Configure Football Schedule",
+                text = "Choose football competitions",
                 style = MaterialTheme.typography.titleLarge,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
@@ -3266,120 +3327,107 @@ fun FootballConfigDialog(
                     .fillMaxWidth()
                     .heightIn(max = 450.dp)
             ) {
-                if (step == 1) {
-                    Text(
-                        text = "Would you like to add a Football Schedule row on your Home Screen?\n\nThis features live match times, scores, and links directly to matched EPG live TV channels for watching games instantly.",
-                        color = Color.LightGray,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                } else {
-                    // Step 2: Configure options
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+                Text(
+                    text = "Select the leagues and cups you want to see on your Home screen.",
+                    color = Color.LightGray,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                if (isLoadingCompetitions) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { showFootballRow = !showFootballRow }
-                            .padding(vertical = 8.dp)
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Checkbox(
-                            checked = showFootballRow,
-                            onCheckedChange = { showFootballRow = it }
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text("Show Football Row on Home", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                            Text("Toggle visibility of live matches on homescreen", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                        CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+                    }
+                } else if (errorMessage != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = errorMessage ?: "Error occurred",
+                                color = Color.Red,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    retryTrigger++
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
+                            ) {
+                                Text("Retry", color = Color.White)
+                            }
                         }
                     }
-
-                    if (showFootballRow) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        
-                        if (isLoadingOptions) {
-                            Box(modifier = Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+                } else {
+                    Column(modifier = Modifier.weight(1f)) {
+                        // Bulk Actions Row
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                        ) {
+                            TextButton(
+                                onClick = { selectedKeys = competitions.map { it.competitionKey }.toSet() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Select All", color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
                             }
-                        } else if (errorMessage != null) {
-                            Text(errorMessage ?: "Error occurred", color = Color.Red, style = MaterialTheme.typography.bodyMedium)
-                        } else {
-                            val options = footballOptions
-                            if (options != null) {
-                                LazyColumn(
+                            TextButton(
+                                onClick = { selectedKeys = emptySet() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Clear All", color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Selected Count
+                        Text(
+                            text = "${selectedKeys.size} selected",
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+
+                        // Competitions List
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(competitions) { comp ->
+                                val isChecked = selectedKeys.contains(comp.competitionKey)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedKeys = if (isChecked) {
+                                                selectedKeys - comp.competitionKey
+                                            } else {
+                                                selectedKeys + comp.competitionKey
+                                            }
+                                        }
+                                        .padding(vertical = 6.dp)
                                 ) {
-                                    // Competitions Section
-                                    item {
-                                        Text("Competitions", style = MaterialTheme.typography.titleMedium, color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                    }
-                                    
-                                    val competitions = options.competitions ?: emptyList()
-                                    if (competitions.isEmpty()) {
-                                        item {
-                                            Text("No competitions available", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                                        }
-                                    } else {
-                                        items(competitions) { comp ->
-                                            val isChecked = selectedComps.contains(comp.competitionCode)
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        selectedComps = if (isChecked) selectedComps - comp.competitionCode else selectedComps + comp.competitionCode
-                                                    }
-                                                    .padding(vertical = 4.dp)
-                                            ) {
-                                                Checkbox(
-                                                    checked = isChecked,
-                                                    onCheckedChange = {
-                                                        selectedComps = if (isChecked) selectedComps - comp.competitionCode else selectedComps + comp.competitionCode
-                                                    }
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(comp.name, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                                            }
-                                        }
-                                    }
-
-                                    // Teams Section
-                                    item {
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Text("Teams", style = MaterialTheme.typography.titleMedium, color = Color(profile.branding.primaryColor), fontWeight = FontWeight.Bold)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                    }
-
-                                    val teams = options.teams ?: emptyList()
-                                    if (teams.isEmpty()) {
-                                        item {
-                                            Text("No teams available", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                                        }
-                                    } else {
-                                        items(teams) { team ->
-                                            val isChecked = selectedTeams.contains(team.teamId)
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        selectedTeams = if (isChecked) selectedTeams - team.teamId else selectedTeams + team.teamId
-                                                    }
-                                                    .padding(vertical = 4.dp)
-                                            ) {
-                                                Checkbox(
-                                                    checked = isChecked,
-                                                    onCheckedChange = {
-                                                        selectedTeams = if (isChecked) selectedTeams - team.teamId else selectedTeams + team.teamId
-                                                    }
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Text(team.name, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                                            }
-                                        }
-                                    }
+                                    Checkbox(
+                                        checked = isChecked,
+                                        onCheckedChange = null // let Row handle click & focus
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = comp.name ?: "",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
                                 }
                             }
                         }
@@ -3388,43 +3436,36 @@ fun FootballConfigDialog(
             }
         },
         confirmButton = {
+            val isEnabled = selectedKeys.isNotEmpty() && !isLoadingCompetitions && errorMessage == null
             Button(
                 onClick = {
-                    if (step == 1) {
-                        step = 2
-                    } else {
-                        // Save changes
-                        repository.footballPrefs.showFootballScheduleOnHome = showFootballRow && (selectedComps.isNotEmpty() || selectedTeams.isNotEmpty())
-                        repository.footballPrefs.selectedFootballCompetitionCodes = selectedComps.toList()
-                        repository.footballPrefs.selectedFootballTeamIds = selectedTeams.toList()
-                        repository.footballPrefs.hasSeenFootballSetup = true
-                        onDismiss()
-                    }
+                    repository.footballPrefs.showFootballScheduleOnHome = true
+                    repository.footballPrefs.selectedFootballCompetitionKeys = selectedKeys.toList()
+                    repository.footballPrefs.hasSeenFootballCompetitionSetup = true
+                    onSelectionSaved(selectedKeys.toList())
+                    onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
-                enabled = step == 1 || !isLoadingOptions
+                enabled = isEnabled
             ) {
-                Text(if (step == 1) "Yes, Configure" else "Save & Finish", color = Color.White)
+                Text("Save", color = Color.White)
             }
         },
         dismissButton = {
             TextButton(
                 onClick = {
-                    if (step == 1) {
-                        // Opt out
+                    if (!repository.footballPrefs.hasSeenFootballCompetitionSetup) {
                         repository.footballPrefs.showFootballScheduleOnHome = false
-                        repository.footballPrefs.hasSeenFootballSetup = true
-                        onDismiss()
-                    } else {
-                        if (isFirstLaunch) {
-                            // On first launch, cancel should at least mark seen
-                            repository.footballPrefs.hasSeenFootballSetup = true
-                        }
-                        onDismiss()
+                        repository.footballPrefs.hasSeenFootballCompetitionSetup = true
+                        onSelectionSaved(emptyList())
                     }
+                    onDismiss()
                 }
             ) {
-                Text(if (step == 1) "No, Thanks" else "Cancel")
+                Text(
+                    text = if (!repository.footballPrefs.hasSeenFootballCompetitionSetup) "Not Now" else "Cancel",
+                    color = Color.Gray
+                )
             }
         },
         containerColor = Color(profile.branding.surfaceColor)

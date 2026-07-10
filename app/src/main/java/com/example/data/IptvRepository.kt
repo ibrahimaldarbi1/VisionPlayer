@@ -788,23 +788,58 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
 
     val footballPrefs by lazy { FootballPrefs(context) }
 
-    suspend fun getFootballOptions(providerId: String): FootballOptionsResponse? = withContext(Dispatchers.IO) {
+    suspend fun getFootballCompetitions(
+        providerId: String,
+        forceRefresh: Boolean = false
+    ): List<FootballCompetitionPreference> = withContext(Dispatchers.IO) {
+        val cached = footballPrefs.getCachedCompetitions()
+        val updatedAt = footballPrefs.cachedCompetitionsUpdatedAt
+        val isFresh = (System.currentTimeMillis() - updatedAt) < 24 * 60 * 60 * 1000L // 24 hours
+
+        if (cached.isNotEmpty() && isFresh && !forceRefresh) {
+            android.util.Log.d("IptvRepository", "Loaded ${cached.size} cached football competitions.")
+            android.util.Log.d("IptvRepository", "Football competitions cache is fresh.")
+            return@withContext cached
+        }
+
+        android.util.Log.d("IptvRepository", "Refreshing football competitions from backend.")
+        val profile = ProviderConfigRegistry.currentProfile
         try {
-            val profile = com.example.config.ProviderConfigRegistry.currentProfile
-            val client = FootballApiClient(profile.footballBackendBaseUrl)
-            client.getFootballOptions(providerId)
+            val client = testFootballApiClient ?: FootballApiClient(profile.footballBackendBaseUrl)
+            val response = withTimeoutOrNull(10000) {
+                client.getFootballCompetitions(
+                    providerId = providerId,
+                    country = profile.footballScheduleCountry
+                )
+            }
+            if (response != null && response.enabled == true) {
+                val comps = response.competitions.orEmpty()
+                if (comps.isNotEmpty()) {
+                    footballPrefs.saveCachedCompetitions(comps)
+                    android.util.Log.d("IptvRepository", "Football backend returned ${comps.size} competitions.")
+                    return@withContext comps
+                }
+            }
+            if (cached.isNotEmpty()) {
+                android.util.Log.d("IptvRepository", "Using stale football competition cache after failure.")
+                return@withContext cached
+            }
+            emptyList()
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to fetch football options", e)
-            null
+            android.util.Log.e("IptvRepository", "Failed to fetch football competitions", e)
+            if (cached.isNotEmpty()) {
+                android.util.Log.d("IptvRepository", "Using stale football competition cache after failure.")
+                return@withContext cached
+            }
+            emptyList()
         }
     }
 
     suspend fun getFootballSchedule(
         providerId: String,
-        selectedCompetitionCodes: List<String>,
-        selectedTeamIds: List<Int>
+        selectedCompetitionKeys: List<String>
     ): List<FootballWatchMatch> = withContext(Dispatchers.IO) {
-        if (selectedCompetitionCodes.isEmpty() && selectedTeamIds.isEmpty()) {
+        if (selectedCompetitionKeys.isEmpty()) {
             return@withContext emptyList()
         }
 
@@ -817,20 +852,17 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
         try {
             val client = testFootballApiClient ?: FootballApiClient(profile.footballBackendBaseUrl)
 
-            val codesParam = selectedCompetitionCodes
-                .takeIf { it.isNotEmpty() }
-                ?.joinToString(",")
-
-            val idsParam = selectedTeamIds
-                .takeIf { it.isNotEmpty() }
-                ?.joinToString(",")
+            val keysParam = selectedCompetitionKeys
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString(",")
 
             val response = withTimeoutOrNull(15000) {
-                client.getFootballWatchSchedule(
+                client.getBeinFootballSchedule(
                     providerId = providerId,
-                    competitionCodes = codesParam,
-                    teamIds = idsParam,
-                    country = profile.footballScheduleCountry
+                    country = profile.footballScheduleCountry,
+                    competitionKeys = keysParam
                 )
             } ?: return@withContext emptyList()
 
@@ -844,26 +876,59 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
                 return@withContext emptyList()
             }
 
-            val localChannels = getCachedLiveChannelsForFootballMapping()
+            val cachedLocalChannels = getCachedLiveChannelsForFootballMapping()
 
-            return@withContext backendMatches.map { backendMatch ->
-                val localChannel = FootballChannelMatcher.findLocalBeinChannelForGuideEvent(
-                    eventChannelName = backendMatch.beinChannelName,
-                    eventChannelNumber = backendMatch.beinChannelNumber,
-                    localChannels = localChannels
-                )
-
-                FootballWatchMatch(
-                    match = backendMatch.toFootballMatch(),
-                    matchedChannel = localChannel,
-                    matchedProgramName = backendMatch.beinChannelName,
-                    confidence = when {
-                        localChannel != null -> "BEIN_GUIDE"
-                        backendMatch.broadcastMatched == true -> "CHANNEL_NOT_FOUND"
-                        else -> "BROADCAST_NOT_FOUND"
+            // Group backend matches (BeinFootballMatch)
+            val groupedBeinMatches = backendMatches.groupBy { beinMatch ->
+                val sourceId = beinMatch.sourceMatchId
+                if (!sourceId.isNullOrBlank()) {
+                    sourceId
+                } else {
+                    val title = beinMatch.title.orEmpty()
+                    val kickoff = beinMatch.kickoffUtc.orEmpty()
+                    if (title.isNotBlank() && kickoff.isNotBlank()) {
+                        val normTitle = FootballMatchUtils.normalize(title)
+                        "$normTitle|$kickoff"
+                    } else {
+                        beinMatch.id.orEmpty()
                     }
-                )
+                }
             }
+
+            val finalMatches = groupedBeinMatches.map { (_, groupMatches) ->
+                // Map each variant to FootballWatchMatch
+                val resolvedVariants = groupMatches.map { backendMatch ->
+                    val localChannel = FootballChannelMatcher.findLocalBeinChannelForGuideEvent(
+                        eventChannelName = backendMatch.channelName,
+                        eventChannelNumber = backendMatch.channelNumber,
+                        localChannels = cachedLocalChannels
+                    )
+
+                    FootballWatchMatch(
+                        match = backendMatch.toFootballMatchCompat(),
+                        matchedChannel = localChannel,
+                        matchedProgramName = backendMatch.channelName,
+                        confidence = if (localChannel != null) {
+                            "BEIN_CHANNEL_MATCHED"
+                        } else {
+                            "CHANNEL_NOT_FOUND"
+                        }
+                    )
+                }
+
+                // Prefer a variant whose beIN channel maps to a local channel
+                val mappedVariants = resolvedVariants.filter { it.matchedChannel != null }
+
+                val chosenVariant = if (mappedVariants.isNotEmpty()) {
+                    mappedVariants.sortedBy { it.matchedProgramName ?: "" }.first()
+                } else {
+                    resolvedVariants.sortedBy { it.matchedProgramName ?: "" }.first()
+                }
+
+                chosenVariant
+            }
+
+            return@withContext finalMatches
         } catch (e: Exception) {
             android.util.Log.e("IptvRepository", "Failed to load football watch schedule.", e)
             emptyList()

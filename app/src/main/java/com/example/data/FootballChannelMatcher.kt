@@ -76,8 +76,27 @@ object FootballChannelMatcher {
     fun extractBeinChannelNumber(value: String?): String? {
         if (value == null) return null
         val normalized = normalizeChannelName(value)
-        val regex = Regex("\\b\\d+\\b")
-        return regex.find(normalized)?.value
+        
+        // Protect against treating 4K / 4 k as channel number 4
+        if (normalized.contains("4k") || normalized.contains("4 k")) {
+            return null
+        }
+        
+        // Target sports, max, xtra, fr, en, ar followed by spaces and a number
+        val regex = Regex("\\b(sports|max|xtra|fr|en|ar)\\s+(\\d+)\\b")
+        val match = regex.find(normalized)
+        if (match != null) {
+            return match.groupValues[2]
+        }
+        
+        // Also support "bein <number>"
+        val regexBein = Regex("\\bbein\\s+(\\d+)\\b")
+        val matchBein = regexBein.find(normalized)
+        if (matchBein != null) {
+            return matchBein.groupValues[1]
+        }
+        
+        return null
     }
 
     fun isBeinMaxChannel(value: String?): Boolean {

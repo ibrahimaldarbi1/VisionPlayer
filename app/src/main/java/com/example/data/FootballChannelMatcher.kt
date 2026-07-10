@@ -118,7 +118,18 @@ object FootballChannelMatcher {
     ): LiveChannel? {
         if (!isBeinChannelName(eventChannelName)) return null
 
-        val beinLocalChannels = localChannels.filter { isBeinChannel(it) }
+        val beinLocalChannels =
+            if (
+                localChannels.all {
+                    isBeinChannel(it)
+                }
+            ) {
+                localChannels
+            } else {
+                localChannels.filter {
+                    isBeinChannel(it)
+                }
+            }
         if (beinLocalChannels.isEmpty()) return null
 
         val eventNorm = normalizeChannelName(eventChannelName)

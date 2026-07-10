@@ -418,6 +418,24 @@ interface IptvDao {
 
     @Query("SELECT * FROM live_channels ORDER BY sortOrder ASC, name ASC")
     suspend fun getCachedLiveChannelsSnapshot(): List<LiveChannelEntity>
+
+    @Query(
+        """
+        SELECT *
+        FROM live_channels
+        WHERE hidden = 0
+          AND (
+            LOWER(name) LIKE '%bein%'
+            OR LOWER(epgId) LIKE '%bein%'
+            OR LOWER(id) LIKE '%bein%'
+            OR name LIKE '%بي ان%'
+            OR name LIKE '%بين%'
+          )
+        ORDER BY sortOrder ASC, name ASC
+        LIMIT 500
+        """
+    )
+    suspend fun getCachedBeinChannelsSnapshot(): List<LiveChannelEntity>
 }
 
 // --- Database ---

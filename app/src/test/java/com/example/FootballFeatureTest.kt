@@ -1024,7 +1024,7 @@ class FootballFeatureTest {
         var didThrowTimeout = false
         try {
             repository.getFootballSchedule("provider_1", listOf("Premier League"))
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             didThrowTimeout = true
         }
         assertTrue(didThrowTimeout)
@@ -1147,4 +1147,143 @@ class FootballFeatureTest {
         assertTrue(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = true, userEnabled = true))
         assertFalse(com.example.data.FootballVisibilityHelper.shouldShowFootballFeature(featureEnabled = false, userEnabled = false))
     }
+
+    @Test
+    fun testFootballChannelSnapshotReturnsOnlyBeinCandidates() =
+        kotlinx.coroutines.runBlocking {
+            val context =
+                ApplicationProvider
+                    .getApplicationContext<Context>()
+
+            val database =
+                androidx.room.Room
+                    .inMemoryDatabaseBuilder(
+                        context,
+                        IptvDatabase::class.java
+                    )
+                    .allowMainThreadQueries()
+                    .build()
+
+            val dao =
+                database.iptvDao()
+
+            val now =
+                System.currentTimeMillis()
+
+            val entities =
+                (1..1000).map {
+                    index ->
+                    LiveChannelEntity(
+                        id =
+                            "ordinary_$index",
+
+                        name =
+                            "Ordinary Channel $index",
+
+                        streamUrl =
+                            "https://example.invalid/$index",
+
+                        logoUrl =
+                            "",
+
+                        categoryId =
+                            "general",
+
+                        categoryName =
+                            "General",
+
+                        epgId =
+                            "ordinary_$index",
+
+                        channelNumber =
+                            index,
+
+                        isLocked =
+                            false,
+
+                        isAdult =
+                            false,
+
+                        hasCatchup =
+                            false,
+
+                        hidden =
+                            false,
+
+                        sortOrder =
+                            index,
+
+                        updatedAt =
+                            now
+                    )
+                } + LiveChannelEntity(
+                    id =
+                        "bein_1",
+
+                    name =
+                        "AR | beIN SPORTS 1 HD",
+
+                    streamUrl =
+                        "https://example.invalid/bein",
+
+                    logoUrl =
+                        "",
+
+                    categoryId =
+                        "sports",
+
+                    categoryName =
+                        "Sports",
+
+                    epgId =
+                        "bein.sports.1",
+
+                    channelNumber =
+                        5001,
+
+                    isLocked =
+                        false,
+
+                    isAdult =
+                        false,
+
+                    hasCatchup =
+                        false,
+
+                    hidden =
+                        false,
+
+                    sortOrder =
+                        5001,
+
+                    updatedAt =
+                        now
+                )
+
+            dao.upsertLiveChannels(
+                entities
+            )
+
+            val repository =
+                IptvRepository(
+                    dao,
+                    context
+                )
+
+            val result =
+                repository
+                    .getCachedLiveChannelsForFootballMapping()
+
+            assertEquals(
+                1,
+                result.size
+            )
+
+            assertEquals(
+                "bein_1",
+                result.first().id
+            )
+
+            database.close()
+        }
 }

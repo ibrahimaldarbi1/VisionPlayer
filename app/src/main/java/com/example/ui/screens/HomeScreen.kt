@@ -3,6 +3,9 @@ package com.example.ui.screens
 import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
+import android.os.SystemClock
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -139,24 +142,77 @@ fun HomeScreen(
             repository.footballPrefs.showFootballScheduleOnHome &&
             selectedFootballCompetitionKeys.isNotEmpty()
         ) {
+            val loadId =
+                SystemClock.elapsedRealtime()
+
+            android.util.Log.d(
+                "FootballTrace",
+                "UI_START id=$loadId " +
+                    "competitions=${selectedFootballCompetitionKeys.size} " +
+                    "retry=$footballRetryCount"
+            )
+
             isLoadingFootball = true
             footballLoadError = null
 
             try {
-                footballMatches = repository.getFootballSchedule(
-                    providerId = profile.providerId,
-                    selectedCompetitionKeys = selectedFootballCompetitionKeys
+                footballMatches =
+                    repository.getFootballSchedule(
+                        providerId =
+                            profile.providerId,
+
+                        selectedCompetitionKeys =
+                            selectedFootballCompetitionKeys
+                    )
+
+                android.util.Log.d(
+                    "FootballTrace",
+                    "UI_SUCCESS id=$loadId " +
+                        "matches=${footballMatches.size}"
                 )
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                android.util.Log.e("HomeScreen", "Football schedule request timed out.", e)
-                footballMatches = emptyList()
-                footballLoadError = "Football schedule request timed out."
+            } catch (
+                e: TimeoutCancellationException
+            ) {
+                android.util.Log.e(
+                    "FootballTrace",
+                    "UI_TIMEOUT id=$loadId",
+                    e
+                )
+
+                footballMatches =
+                    emptyList()
+
+                footballLoadError =
+                    "Football schedule request timed out."
+            } catch (
+                e: CancellationException
+            ) {
+                android.util.Log.d(
+                    "FootballTrace",
+                    "UI_CANCELLED id=$loadId"
+                )
+
+                throw e
             } catch (e: Exception) {
-                android.util.Log.e("HomeScreen", "Failed to load football schedule.", e)
-                footballMatches = emptyList()
-                footballLoadError = "Could not load football schedule."
+                android.util.Log.e(
+                    "FootballTrace",
+                    "UI_ERROR id=$loadId",
+                    e
+                )
+
+                footballMatches =
+                    emptyList()
+
+                footballLoadError =
+                    "Could not load football schedule."
             } finally {
                 isLoadingFootball = false
+
+                android.util.Log.d(
+                    "FootballTrace",
+                    "UI_FINALLY id=$loadId " +
+                        "loading=$isLoadingFootball"
+                )
             }
         } else {
             footballMatches = emptyList()
@@ -3309,6 +3365,10 @@ fun FootballConfigDialog(
             } else if (competitions.isEmpty()) {
                 errorMessage = "Could not load football competitions."
             }
+        } catch (
+            e: CancellationException
+        ) {
+            throw e
         } catch (e: Exception) {
             if (competitions.isEmpty()) {
                 errorMessage = "Could not load football competitions."

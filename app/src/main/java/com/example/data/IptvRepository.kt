@@ -1,6 +1,8 @@
 package com.example.data
 
 import android.content.Context
+import android.os.SystemClock
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -20,7 +22,7 @@ import com.example.config.ProviderConfigRegistry
 class IptvRepository(private val dao: IptvDao, private val context: android.content.Context) {
 
     var testFootballApiClient: FootballApiClient? = null
-    var footballScheduleTimeoutMs: Long = 15_000L
+    var footballScheduleTimeoutMs: Long = 25_000L
 
     fun clearCache() {
         // No-op now that we utilize Room SQLite database cache
@@ -840,123 +842,363 @@ class IptvRepository(private val dao: IptvDao, private val context: android.cont
 
     suspend fun getFootballSchedule(
         providerId: String,
-        selectedCompetitionKeys: List<String>
-    ): List<FootballWatchMatch> = withContext(Dispatchers.IO) {
-        if (selectedCompetitionKeys.isEmpty()) {
-            return@withContext emptyList()
-        }
-
-        val profile = ProviderConfigRegistry.currentProfile
-
-        if (!profile.features.footballScheduleEnabled) {
-            return@withContext emptyList()
-        }
-
-        try {
-            val client = testFootballApiClient ?: FootballApiClient(profile.footballBackendBaseUrl)
-
-            val keysParam = selectedCompetitionKeys
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .distinct()
-                .joinToString(",")
-
-            val response = withTimeout(footballScheduleTimeoutMs) {
-                client.getBeinFootballSchedule(
-                    providerId = providerId,
-                    country = profile.footballScheduleCountry,
-                    competitionKeys = keysParam
-                )
+        selectedCompetitionKeys:
+            List<String>
+    ): List<FootballWatchMatch> =
+        withContext<List<FootballWatchMatch>>(Dispatchers.IO) {
+            if (
+                selectedCompetitionKeys
+                    .isEmpty()
+            ) {
+                return@withContext emptyList<FootballWatchMatch>()
             }
 
-            if (response.enabled == false) {
-                return@withContext emptyList()
+            val profile =
+                ProviderConfigRegistry
+                    .currentProfile
+
+            if (
+                !profile.features
+                    .footballScheduleEnabled
+            ) {
+                return@withContext emptyList<FootballWatchMatch>()
             }
 
-            val backendMatches = response.matches.orEmpty()
+            val traceId =
+                SystemClock
+                    .elapsedRealtime()
 
-            if (backendMatches.isEmpty()) {
-                return@withContext emptyList()
-            }
+            val totalStartedAt =
+                SystemClock
+                    .elapsedRealtime()
 
-            val cachedLocalChannels = getCachedLiveChannelsForFootballMapping()
+            android.util.Log.d(
+                "FootballTrace",
+                "REPOSITORY_START id=$traceId " +
+                    "keys=${selectedCompetitionKeys.size}"
+            )
 
-            // Group backend matches (BeinFootballMatch)
-            val groupedBeinMatches = backendMatches.groupBy { beinMatch ->
-                val sourceId = beinMatch.sourceMatchId
-                if (!sourceId.isNullOrBlank()) {
-                    sourceId
-                } else {
-                    val title = beinMatch.title.orEmpty()
-                    val kickoff = beinMatch.kickoffUtc.orEmpty()
-                    if (title.isNotBlank() && kickoff.isNotBlank()) {
-                        val normTitle = FootballMatchUtils.normalize(title)
-                        "$normTitle|$kickoff"
-                    } else {
-                        beinMatch.id.orEmpty()
+            try {
+                withTimeout(
+                    footballScheduleTimeoutMs
+                ) {
+                    val client =
+                        testFootballApiClient
+                            ?: FootballApiClient(
+                                profile
+                                    .footballBackendBaseUrl
+                            )
+
+                    val keysParam =
+                        selectedCompetitionKeys
+                            .map {
+                                it.trim()
+                            }
+                            .filter {
+                                it.isNotEmpty()
+                            }
+                            .distinct()
+                            .joinToString(",")
+
+                    val networkStartedAt =
+                        SystemClock
+                            .elapsedRealtime()
+
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "HTTP_START id=$traceId"
+                    )
+
+                    val response =
+                        client
+                            .getBeinFootballSchedule(
+                                providerId =
+                                    providerId,
+
+                                country =
+                                    profile
+                                        .footballScheduleCountry,
+
+                                competitionKeys =
+                                    keysParam
+                            )
+
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "HTTP_DONE id=$traceId " +
+                            "matches=${response.matches.orEmpty().size} " +
+                            "ms=${
+                                SystemClock.elapsedRealtime() -
+                                    networkStartedAt
+                            }"
+                    )
+
+                    if (
+                        response.enabled ==
+                        false
+                    ) {
+                        return@withTimeout emptyList<FootballWatchMatch>()
                     }
-                }
-            }
 
-            val finalMatches = groupedBeinMatches.map { (_, groupMatches) ->
-                // Map each variant to FootballWatchMatch
-                val resolvedVariants = groupMatches.map { backendMatch ->
-                    val localChannel = FootballChannelMatcher.findLocalBeinChannelForGuideEvent(
-                        eventChannelName = backendMatch.channelName,
-                        eventChannelNumber = backendMatch.channelNumber,
-                        localChannels = cachedLocalChannels
+                    val backendMatches =
+                        response.matches
+                            .orEmpty()
+
+                    if (
+                        backendMatches
+                            .isEmpty()
+                    ) {
+                        return@withTimeout emptyList<FootballWatchMatch>()
+                    }
+
+                    val channelsStartedAt =
+                        SystemClock
+                            .elapsedRealtime()
+
+                    val cachedLocalChannels =
+                        getCachedLiveChannelsForFootballMapping()
+
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "CHANNELS_READY id=$traceId " +
+                            "count=${cachedLocalChannels.size} " +
+                            "ms=${
+                                SystemClock.elapsedRealtime() -
+                                    channelsStartedAt
+                            }"
                     )
 
-                    FootballWatchMatch(
-                        match = backendMatch.toFootballMatchCompat(),
-                        matchedChannel = localChannel,
-                        matchedProgramName = backendMatch.channelName,
-                        confidence = if (localChannel != null) {
-                            "BEIN_CHANNEL_MATCHED"
-                        } else {
-                            "CHANNEL_NOT_FOUND"
+                    val matchingStartedAt =
+                        SystemClock
+                            .elapsedRealtime()
+
+                    val groupedBeinMatches =
+                        backendMatches.groupBy {
+                            beinMatch ->
+                            val sourceId =
+                                beinMatch
+                                    .sourceMatchId
+
+                            if (
+                                !sourceId
+                                    .isNullOrBlank()
+                            ) {
+                                sourceId
+                            } else {
+                                val title =
+                                    beinMatch
+                                        .title
+                                        .orEmpty()
+
+                                val kickoff =
+                                    beinMatch
+                                        .kickoffUtc
+                                        .orEmpty()
+
+                                if (
+                                    title.isNotBlank() &&
+                                    kickoff.isNotBlank()
+                                ) {
+                                    val normalizedTitle =
+                                        FootballMatchUtils
+                                            .normalize(
+                                                title
+                                            )
+
+                                    "$normalizedTitle|$kickoff"
+                                } else {
+                                    beinMatch
+                                        .id
+                                        .orEmpty()
+                                }
+                            }
                         }
+
+                    val finalMatches =
+                        groupedBeinMatches
+                            .mapNotNull {
+                                (_, groupMatches) ->
+
+                                val resolvedVariants =
+                                    groupMatches.map {
+                                        backendMatch ->
+
+                                        val localChannel =
+                                            FootballChannelMatcher
+                                                .findLocalBeinChannelForGuideEvent(
+                                                    eventChannelName =
+                                                        backendMatch
+                                                            .channelName,
+
+                                                    eventChannelNumber =
+                                                        backendMatch
+                                                            .channelNumber,
+
+                                                    localChannels =
+                                                        cachedLocalChannels
+                                                )
+
+                                        FootballWatchMatch(
+                                            match =
+                                                backendMatch
+                                                    .toFootballMatchCompat(),
+
+                                            matchedChannel =
+                                                localChannel,
+
+                                            matchedProgramName =
+                                                backendMatch
+                                                    .channelName,
+
+                                            confidence =
+                                                if (
+                                                    localChannel !=
+                                                    null
+                                                ) {
+                                                    "BEIN_CHANNEL_MATCHED"
+                                                } else {
+                                                    "CHANNEL_NOT_FOUND"
+                                                }
+                                        )
+                                    }
+
+                                if (
+                                    resolvedVariants
+                                        .isEmpty()
+                                ) {
+                                    null
+                                } else {
+                                    val mappedVariants =
+                                        resolvedVariants
+                                            .filter {
+                                                it.matchedChannel !=
+                                                    null
+                                            }
+
+                                    if (
+                                        mappedVariants
+                                            .isNotEmpty()
+                                    ) {
+                                        mappedVariants
+                                            .sortedBy {
+                                                it.matchedProgramName
+                                                    .orEmpty()
+                                            }
+                                            .first()
+                                    } else {
+                                        resolvedVariants
+                                            .sortedBy {
+                                                it.matchedProgramName
+                                                    .orEmpty()
+                                            }
+                                            .first()
+                                    }
+                                }
+                            }
+
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "MATCHING_DONE id=$traceId " +
+                            "groups=${groupedBeinMatches.size} " +
+                            "result=${finalMatches.size} " +
+                            "ms=${
+                                SystemClock.elapsedRealtime() -
+                                    matchingStartedAt
+                            }"
                     )
+
+                    android.util.Log.d(
+                        "FootballTrace",
+                        "REPOSITORY_DONE id=$traceId " +
+                            "totalMs=${
+                                SystemClock.elapsedRealtime() -
+                                    totalStartedAt
+                            }"
+                    )
+
+                    finalMatches
                 }
+            } catch (
+                e: TimeoutCancellationException
+            ) {
+                android.util.Log.e(
+                    "FootballTrace",
+                    "REPOSITORY_TIMEOUT id=$traceId " +
+                        "totalMs=${
+                            SystemClock.elapsedRealtime() -
+                                totalStartedAt
+                        }",
+                    e
+                )
 
-                // Prefer a variant whose beIN channel maps to a local channel
-                val mappedVariants = resolvedVariants.filter { it.matchedChannel != null }
+                throw e
+            } catch (
+                e: CancellationException
+            ) {
+                android.util.Log.d(
+                    "FootballTrace",
+                    "REPOSITORY_CANCELLED id=$traceId"
+                )
 
-                val chosenVariant = if (mappedVariants.isNotEmpty()) {
-                    mappedVariants.sortedBy { it.matchedProgramName ?: "" }.first()
-                } else {
-                    resolvedVariants.sortedBy { it.matchedProgramName ?: "" }.first()
-                }
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e(
+                    "FootballTrace",
+                    "REPOSITORY_ERROR id=$traceId",
+                    e
+                )
 
-                chosenVariant
+                throw e
             }
-
-            return@withContext finalMatches
-        } catch (e: CancellationException) {
-            android.util.Log.e(
-                "IptvRepository",
-                "Football schedule request was cancelled or timed out.",
-                e
-            )
-            throw e
-        } catch (e: Exception) {
-            android.util.Log.e(
-                "IptvRepository",
-                "Failed to load football schedule.",
-                e
-            )
-            throw e
         }
-    }
 
-    suspend fun getCachedLiveChannelsForFootballMapping(): List<LiveChannel> = withContext(Dispatchers.IO) {
-        try {
-            dao.getCachedLiveChannelsSnapshot().map { it.toDomain() }
-        } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to load cached channels for football mapping.", e)
-            emptyList()
+    suspend fun getCachedLiveChannelsForFootballMapping():
+        List<LiveChannel> =
+        withContext(Dispatchers.IO) {
+            val startedAt =
+                SystemClock.elapsedRealtime()
+
+            android.util.Log.d(
+                "FootballTrace",
+                "CHANNEL_QUERY_START"
+            )
+
+            try {
+                val entities =
+                    dao.getCachedBeinChannelsSnapshot()
+
+                val result =
+                    entities.map {
+                        it.toDomain()
+                    }
+
+                android.util.Log.d(
+                    "FootballTrace",
+                    "CHANNEL_QUERY_DONE " +
+                        "count=${result.size} " +
+                        "ms=${SystemClock.elapsedRealtime() - startedAt}"
+                )
+
+                result
+            } catch (
+                e: CancellationException
+            ) {
+                android.util.Log.d(
+                    "FootballTrace",
+                    "CHANNEL_QUERY_CANCELLED"
+                )
+
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e(
+                    "FootballTrace",
+                    "CHANNEL_QUERY_ERROR",
+                    e
+                )
+
+                emptyList()
+            }
         }
-    }
 
     suspend fun loadHome(providerId: String): Result<HomeResponse> = withContext(Dispatchers.IO) {
         try {

@@ -417,7 +417,10 @@ fun HomeScreen(
                             initialLoading = liveState.initialLoading,
                             refreshing = liveState.refreshing,
                             channelsError = liveState.channelsError,
-                            onRetryChannels = liveViewModel::retryChannels
+                            onRetryChannels = liveViewModel::retryChannels,
+                            categoriesError = liveState.categoriesError,
+                            categoriesLoading = liveState.categoriesLoading,
+                            onRetryCategories = liveViewModel::retryCategories
                         )
                     }
                     "MOVIES" -> if (profile.features.moviesEnabled) {

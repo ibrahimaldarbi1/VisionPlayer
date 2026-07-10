@@ -37,6 +37,23 @@ class LiveViewModel(
     private var activeChannelRequestKey: ChannelRequestKey? = null
     private var rawChannels: List<LiveChannel> = emptyList()
 
+    private fun applyVisibleCategoryFilter(
+        channels: List<LiveChannel>,
+        state: LiveUiState = _uiState.value
+    ): List<LiveChannel> {
+        if (!state.categoryVisibilityReady) {
+            return channels
+        }
+
+        val visibleCategoryIds = state.categories
+            .map { it.id }
+            .toSet()
+
+        return channels.filter {
+            it.categoryId in visibleCategoryIds
+        }
+    }
+
     fun onProfileChanged(profile: ProviderProfile) {
         if (!profile.features.liveTvEnabled) {
             cancelVisibleCategoriesObserver()
@@ -56,9 +73,11 @@ class LiveViewModel(
                     hasLoadedCategories = false,
                     hasLoadedChannels = false,
                     initialLoading = false,
-                    refreshing = false,
+                    categoriesRefreshing = false,
+                    channelsRefreshing = false,
                     categoriesLoading = false,
-                    channelsLoading = false
+                    channelsLoading = false,
+                    categoryVisibilityReady = false
                 )
             }
             return
@@ -88,9 +107,11 @@ class LiveViewModel(
                     hasLoadedCategories = false,
                     hasLoadedChannels = false,
                     initialLoading = false,
-                    refreshing = false,
+                    categoriesRefreshing = false,
+                    channelsRefreshing = false,
                     categoriesLoading = false,
-                    channelsLoading = false
+                    channelsLoading = false,
+                    categoryVisibilityReady = false
                 )
             }
 
@@ -115,19 +136,28 @@ class LiveViewModel(
                     if (currentProviderId != providerId) return@collect
 
                     val visibleIds = categories.map { it.id }.toSet()
-                    val selectedId = _uiState.value.selectedCategoryId
-                    val isSelectedCategoryVisible = selectedId == null || visibleIds.contains(selectedId)
+                    val selectedCategoryId = _uiState.value.selectedCategoryId
+                    val selectedStillVisible = selectedCategoryId == null || selectedCategoryId in visibleIds
 
-                    _uiState.update { currentState ->
-                        currentState.copy(
+                    _uiState.update { current ->
+                        val updated = current.copy(
                             categories = categories,
-                            channels = rawChannels.filter { it.categoryId in visibleIds }
+                            categoryVisibilityReady = true,
+                            categoriesError = null
+                        )
+                        updated.copy(
+                            channels = applyVisibleCategoryFilter(rawChannels, updated)
                         )
                     }
 
-                    if (!isSelectedCategoryVisible) {
-                        _uiState.update { it.copy(selectedCategoryId = null) }
-                        loadChannels(providerId, null)
+                    if (!selectedStillVisible) {
+                        _uiState.update {
+                            it.copy(selectedCategoryId = null)
+                        }
+                        loadChannels(
+                            providerId = providerId,
+                            categoryId = null
+                        )
                     }
                 }
             } catch (e: CancellationException) {
@@ -152,13 +182,13 @@ class LiveViewModel(
         }
 
         categoriesGeneration++
-        val myGeneration = categoriesGeneration
+        val requestGeneration = categoriesGeneration
 
         val hasCategories = _uiState.value.categories.isNotEmpty()
         _uiState.update { currentState ->
             currentState.copy(
                 categoriesLoading = !hasCategories,
-                refreshing = hasCategories && currentState.channelsLoading, // If channels are already loading
+                categoriesRefreshing = hasCategories,
                 categoriesError = null
             )
         }
@@ -166,18 +196,26 @@ class LiveViewModel(
         categoriesLoadJob = viewModelScope.launch {
             try {
                 dataSource.loadCategories(providerId).collect { categories ->
-                    if (categoriesGeneration != myGeneration || currentProviderId != providerId) return@collect
+                    if (categoriesGeneration != requestGeneration || currentProviderId != providerId) return@collect
 
-                    _uiState.update { currentState ->
-                        currentState.copy(
-                            hasLoadedCategories = true
-                        )
+                    _uiState.update { current ->
+                        if (current.categoryVisibilityReady) {
+                            current.copy(
+                                hasLoadedCategories = true
+                            )
+                        } else {
+                            current.copy(
+                                categories = categories,
+                                hasLoadedCategories = true
+                            )
+                        }
                     }
                 }
-                if (categoriesGeneration == myGeneration && currentProviderId == providerId) {
+                if (categoriesGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
                         currentState.copy(
                             categoriesLoading = false,
+                            categoriesRefreshing = false,
                             hasLoadedCategories = true
                         )
                     }
@@ -185,7 +223,7 @@ class LiveViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
-                if (categoriesGeneration == myGeneration && currentProviderId == providerId) {
+                if (categoriesGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
                         currentState.copy(
                             categoriesError = "Could not load Live TV categories."
@@ -193,10 +231,11 @@ class LiveViewModel(
                     }
                 }
             } finally {
-                if (categoriesGeneration == myGeneration && currentProviderId == providerId) {
+                if (categoriesGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
                         currentState.copy(
-                            categoriesLoading = false
+                            categoriesLoading = false,
+                            categoriesRefreshing = false
                         )
                     }
                 }
@@ -208,22 +247,24 @@ class LiveViewModel(
         val normalizedCategoryId = if (categoryId.isNullOrBlank()) null else categoryId
         val requestKey = ChannelRequestKey(providerId, normalizedCategoryId)
 
-        if (activeChannelRequestKey == requestKey && channelsLoadJob?.isActive == true && !force) {
+        val previousRequestKey = activeChannelRequestKey
+        val sameRequest = previousRequestKey == requestKey
+
+        if (sameRequest && channelsLoadJob?.isActive == true && !force) {
             return
         }
 
-        if (activeChannelRequestKey != requestKey) {
-            channelsLoadJob?.cancel()
-        } else if (force) {
+        if (!sameRequest || force) {
             channelsLoadJob?.cancel()
         }
 
         channelsGeneration++
-        val myGeneration = channelsGeneration
+        val requestGeneration = channelsGeneration
         activeChannelRequestKey = requestKey
 
-        val isSameRequestKey = activeChannelRequestKey == requestKey
-        if (!isSameRequestKey || !force) {
+        val preserveExisting = sameRequest && rawChannels.isNotEmpty()
+
+        if (!preserveExisting) {
             rawChannels = emptyList()
             _uiState.update { currentState ->
                 currentState.copy(
@@ -245,31 +286,30 @@ class LiveViewModel(
             currentState.copy(
                 channelsLoading = !hasChannels,
                 initialLoading = !hasChannels,
-                refreshing = hasChannels
+                channelsRefreshing = hasChannels
             )
         }
 
         channelsLoadJob = viewModelScope.launch {
             try {
                 dataSource.loadChannels(providerId, normalizedCategoryId).collect { channels ->
-                    if (channelsGeneration != myGeneration || currentProviderId != providerId) return@collect
+                    if (channelsGeneration != requestGeneration || currentProviderId != providerId) return@collect
 
                     rawChannels = channels
-                    val visibleIds = _uiState.value.categories.map { it.id }.toSet()
                     _uiState.update { currentState ->
                         currentState.copy(
-                            channels = channels.filter { it.categoryId in visibleIds },
+                            channels = applyVisibleCategoryFilter(channels, currentState),
                             hasLoadedChannels = true,
                             channelsLoading = false,
                             initialLoading = false,
-                            refreshing = false
+                            channelsRefreshing = false
                         )
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
-                if (channelsGeneration == myGeneration && currentProviderId == providerId) {
+                if (channelsGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
                         currentState.copy(
                             channelsError = "Could not load Live TV channels."
@@ -277,12 +317,12 @@ class LiveViewModel(
                     }
                 }
             } finally {
-                if (channelsGeneration == myGeneration && currentProviderId == providerId) {
+                if (channelsGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
                         currentState.copy(
                             channelsLoading = false,
                             initialLoading = false,
-                            refreshing = false
+                            channelsRefreshing = false
                         )
                     }
                 }
@@ -320,7 +360,7 @@ class LiveViewModel(
             _uiState.update { currentState ->
                 currentState.copy(
                     categoriesLoading = false,
-                    refreshing = false
+                    categoriesRefreshing = false
                 )
             }
         }
@@ -335,7 +375,7 @@ class LiveViewModel(
                 currentState.copy(
                     channelsLoading = false,
                     initialLoading = false,
-                    refreshing = false
+                    channelsRefreshing = false
                 )
             }
         }

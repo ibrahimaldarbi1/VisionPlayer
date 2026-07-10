@@ -41,7 +41,10 @@ fun LiveChannelsView(
     initialLoading: Boolean = false,
     refreshing: Boolean = false,
     channelsError: String? = null,
-    onRetryChannels: () -> Unit = {}
+    onRetryChannels: () -> Unit = {},
+    categoriesError: String? = null,
+    categoriesLoading: Boolean = false,
+    onRetryCategories: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
     val coroutineScope = rememberCoroutineScope()
@@ -152,28 +155,73 @@ fun LiveChannelsView(
             }
         }
 
-        // Categories horizontal list
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 16.dp)) {
-            item {
-                FilterChip(
-                    selected = selectedCategory == null,
-                    onClick = { onCategorySelected(null) },
-                    label = { Text("All Channels") },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(profile.branding.primaryColor),
-                        selectedLabelColor = Color.White
-                    )
+        if (categoriesError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("categories_error_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Could not update channel categories.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
                 )
+                Button(
+                    onClick = onRetryCategories,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
+                ) {
+                    Text("Retry")
+                }
             }
-            items(categories) { cat ->
-                FilterChip(
-                    selected = selectedCategory == cat.id,
-                    onClick = { onCategorySelected(cat.id) },
-                    label = { Text(cat.name) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(profile.branding.primaryColor),
-                        selectedLabelColor = Color.White
+        }
+
+        // Categories horizontal list
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    FilterChip(
+                        selected = selectedCategory == null,
+                        onClick = { onCategorySelected(null) },
+                        label = { Text("All Channels") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(profile.branding.primaryColor),
+                            selectedLabelColor = Color.White
+                        )
                     )
+                }
+                items(categories) { cat ->
+                    FilterChip(
+                        selected = selectedCategory == cat.id,
+                        onClick = { onCategorySelected(cat.id) },
+                        label = { Text(cat.name) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(profile.branding.primaryColor),
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                }
+            }
+
+            if (categoriesLoading && categories.isEmpty()) {
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .size(20.dp)
+                        .testTag("categories_loading_indicator"),
+                    strokeWidth = 2.dp,
+                    color = Color(profile.branding.primaryColor)
                 )
             }
         }

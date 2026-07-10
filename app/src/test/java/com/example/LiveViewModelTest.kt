@@ -61,15 +61,24 @@ class LiveViewModelTest {
         var lastChannelsCategoryId: String? = null
         var lastObserveProviderId: String? = null
 
+        val categoryResultsByProvider = mutableMapOf<String, List<List<Category>>>()
+        val channelResultsByRequest = mutableMapOf<Pair<String, String?>, List<List<LiveChannel>>>()
+        val categoryDelayByProvider = mutableMapOf<String, Long>()
+        val channelDelayByRequest = mutableMapOf<Pair<String, String?>, Long>()
+        val observeResultsByProvider = mutableMapOf<String, List<List<Category>>>()
+        val observeDelayByProvider = mutableMapOf<String, Long>()
+
         override fun observeVisibleCategories(providerId: String): Flow<List<Category>> = flow {
             observeCallCount++
             lastObserveProviderId = providerId
-            if (observeDelayMs > 0) {
-                delay(observeDelayMs)
+            val delayMs = observeDelayByProvider[providerId] ?: observeDelayMs
+            if (delayMs > 0) {
+                delay(delayMs)
             }
             observeError?.let { throw it }
-            if (observeEmissions.isNotEmpty()) {
-                for (em in observeEmissions) {
+            val emissions = observeResultsByProvider[providerId] ?: observeEmissions
+            if (emissions.isNotEmpty()) {
+                for (em in emissions) {
                     emit(em)
                 }
             } else {
@@ -80,12 +89,14 @@ class LiveViewModelTest {
         override fun loadCategories(providerId: String): Flow<List<Category>> = flow {
             categoriesCallCount++
             lastCategoriesProviderId = providerId
-            if (categoriesDelayMs > 0) {
-                delay(categoriesDelayMs)
+            val delayMs = categoryDelayByProvider[providerId] ?: categoriesDelayMs
+            if (delayMs > 0) {
+                delay(delayMs)
             }
             categoriesError?.let { throw it }
-            if (categoriesEmissions.isNotEmpty()) {
-                for (em in categoriesEmissions) {
+            val emissions = categoryResultsByProvider[providerId] ?: categoriesEmissions
+            if (emissions.isNotEmpty()) {
+                for (em in emissions) {
                     emit(em)
                 }
             }
@@ -95,12 +106,15 @@ class LiveViewModelTest {
             channelsCallCount++
             lastChannelsProviderId = providerId
             lastChannelsCategoryId = categoryId
-            if (channelsDelayMs > 0) {
-                delay(channelsDelayMs)
+            val key = Pair(providerId, categoryId)
+            val delayMs = channelDelayByRequest[key] ?: channelsDelayMs
+            if (delayMs > 0) {
+                delay(delayMs)
             }
             channelsError?.let { throw it }
-            if (channelsEmissions.isNotEmpty()) {
-                for (em in channelsEmissions) {
+            val emissions = channelResultsByRequest[key] ?: channelsEmissions
+            if (emissions.isNotEmpty()) {
+                for (em in emissions) {
                     emit(em)
                 }
             }
@@ -281,38 +295,52 @@ class LiveViewModelTest {
     @Test
     fun testOldProviderCategoryResultCannotOverwriteNewState() = runTest {
         val fake = FakeLiveDataSource().apply {
-            categoriesDelayMs = 1000L
-            categoriesEmissions = listOf(listOf(createCategory("cat_old", "Category Old")))
+            categoryDelayByProvider["prov_old"] = 1000L
+            categoryResultsByProvider["prov_old"] = listOf(listOf(createCategory("cat_old", "Category Old")))
+
+            categoryDelayByProvider["prov_new"] = 100L
+            categoryResultsByProvider["prov_new"] = listOf(listOf(createCategory("cat_new", "Category New")))
+
+            // Observe visible categories for new provider is ready
+            observeResultsByProvider["prov_new"] = listOf(listOf(createCategory("cat_new", "Category New")))
+            observeResultsByProvider["prov_old"] = listOf(listOf(createCategory("cat_old", "Category Old")))
         }
         val vm = LiveViewModel(fake)
         vm.onProfileChanged(createEnabledProfile("prov_old"))
-        advanceTimeBy(500L)
+        advanceTimeBy(500L) // prov_old is still loading categories
 
-        fake.categoriesDelayMs = 0L
-        fake.categoriesEmissions = listOf(listOf(createCategory("cat_new", "Category New")))
         vm.onProfileChanged(createEnabledProfile("prov_new"))
-        advanceUntilIdle()
+        advanceUntilIdle() // let everything complete
 
-        assertTrue(vm.uiState.value.categories.isEmpty()) // Since observe emission handles final categories, and fake didn't emit observe categories for prov_new
+        // The UI must contain "cat_new" and must NOT contain "cat_old"
+        val finalCategories = vm.uiState.value.categories
+        assertTrue(finalCategories.any { it.id == "cat_new" })
+        assertFalse(finalCategories.any { it.id == "cat_old" })
     }
 
     // 8. Old provider channel result cannot overwrite new state.
     @Test
     fun testOldProviderChannelResultCannotOverwriteNewState() = runTest {
         val fake = FakeLiveDataSource().apply {
-            channelsDelayMs = 1000L
-            channelsEmissions = listOf(listOf(createChannel("chan_old", "Channel Old", "cat1")))
+            channelDelayByRequest[Pair("prov_old", null)] = 1000L
+            channelResultsByRequest[Pair("prov_old", null)] = listOf(listOf(createChannel("chan_old", "Channel Old", "cat1")))
+
+            channelDelayByRequest[Pair("prov_new", null)] = 100L
+            channelResultsByRequest[Pair("prov_new", null)] = listOf(listOf(createChannel("chan_new", "Channel New", "cat1")))
+
+            observeResultsByProvider["prov_new"] = listOf(listOf(createCategory("cat1", "Category 1")))
+            observeResultsByProvider["prov_old"] = listOf(listOf(createCategory("cat1", "Category 1")))
         }
         val vm = LiveViewModel(fake)
         vm.onProfileChanged(createEnabledProfile("prov_old"))
-        advanceTimeBy(500L)
+        advanceTimeBy(500L) // prov_old channels are still loading
 
-        fake.channelsDelayMs = 0L
-        fake.channelsEmissions = listOf(listOf(createChannel("chan_new", "Channel New", "cat1")))
         vm.onProfileChanged(createEnabledProfile("prov_new"))
-        advanceUntilIdle()
+        advanceUntilIdle() // let everything complete
 
-        assertTrue(vm.uiState.value.channels.isEmpty())
+        val finalChannels = vm.uiState.value.channels
+        assertTrue(finalChannels.any { it.id == "chan_new" })
+        assertFalse(finalChannels.any { it.id == "chan_old" })
     }
 
     // 9. Cached category emission is displayed.
@@ -454,20 +482,30 @@ class LiveViewModelTest {
     @Test
     fun testOldCategoryResultCannotOverwriteNewCategory() = runTest {
         val fake = FakeLiveDataSource().apply {
-            channelsDelayMs = 1000L
-            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
-            observeEmissions = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
+            observeResultsByProvider["prov_1"] = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
+
+            channelDelayByRequest[Pair("prov_1", "cat1")] = 1000L
+            channelResultsByRequest[Pair("prov_1", "cat1")] = listOf(listOf(createChannel("chan_old", "Old Channel", "cat1")))
+
+            channelDelayByRequest[Pair("prov_1", "cat2")] = 100L
+            channelResultsByRequest[Pair("prov_1", "cat2")] = listOf(listOf(createChannel("chan_new", "New Channel", "cat2")))
         }
         val vm = LiveViewModel(fake)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
-        advanceTimeBy(500L) // First load in flight
+        advanceUntilIdle() // loads initial null category channels
 
-        fake.channelsDelayMs = 0L
-        fake.channelsEmissions = listOf(listOf(createChannel("chan2", "Channel 2", "cat2")))
+        // Select cat1 (slow request)
+        vm.selectCategory("cat1")
+        advanceTimeBy(500L) // in flight
+
+        // Select cat2 (fast request)
         vm.selectCategory("cat2")
-        advanceUntilIdle()
+        advanceUntilIdle() // both finish
 
-        assertEquals(listOf(createChannel("chan2", "Channel 2", "cat2")), vm.uiState.value.channels)
+        assertEquals("cat2", vm.uiState.value.selectedCategoryId)
+        val finalChannels = vm.uiState.value.channels
+        assertTrue(finalChannels.any { it.id == "chan_new" })
+        assertFalse(finalChannels.any { it.id == "chan_old" })
     }
 
     // 18. Initial loading stops after success.
@@ -645,5 +683,215 @@ class LiveViewModelTest {
         // Jobs are cancelled normally, loading ceases without crashes
         assertFalse(vm.uiState.value.channelsLoading)
         assertFalse(vm.uiState.value.categoriesLoading)
+    }
+
+    // 28. Channels arrive before categories: channels remain visible before category readiness.
+    @Test
+    fun testRaceChannelsArriveBeforeCategories() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertEquals("chan1", vm.uiState.value.channels[0].id)
+    }
+
+    // 29. Categories arrive later: channels are then filtered correctly.
+    @Test
+    fun testRaceCategoriesArriveLater() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1"), createChannel("chan2", "Channel 2", "cat2")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertEquals(2, vm.uiState.value.channels.size)
+
+        fake.observeFlow.emit(listOf(createCategory("cat1", "Category 1")))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertEquals("chan1", vm.uiState.value.channels[0].id)
+    }
+
+    // 30. Category observer fails but channels succeed: channels remain visible.
+    @Test
+    fun testCategoryObserverFailsButChannelsSucceed() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeError = RuntimeException("Connection failed")
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertNotNull(vm.uiState.value.categoriesError)
+    }
+
+    // 31. All categories are intentionally hidden after readiness: displayed channels become empty.
+    @Test
+    fun testAllCategoriesHiddenAfterReadiness() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        fake.observeFlow.emit(listOf(createCategory("cat1", "Category 1")))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.categoryVisibilityReady)
+
+        fake.channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        vm.retryChannels()
+        advanceUntilIdle()
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        fake.observeFlow.emit(emptyList())
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.channels.isEmpty())
+    }
+
+    // 32. A hidden selected category resets to All Channels.
+    @Test
+    fun testHiddenSelectedCategoryResetsToAllChannels() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        fake.observeFlow.emit(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
+        advanceUntilIdle()
+
+        vm.selectCategory("cat1")
+        advanceUntilIdle()
+        assertEquals("cat1", vm.uiState.value.selectedCategoryId)
+
+        fake.observeFlow.emit(listOf(createCategory("cat2", "Category 2")))
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.selectedCategoryId)
+    }
+
+    // 33. Category refresh and channel refresh overlap: finishing one does not clear the other’s refresh state.
+    @Test
+    fun testCategoryAndChannelRefreshOverlap() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            categoriesEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        fake.categoriesDelayMs = 1000L
+        fake.channelsDelayMs = 500L
+
+        vm.retryCategories()
+        vm.retryChannels()
+
+        advanceTimeBy(100L)
+        assertTrue(vm.uiState.value.categoriesRefreshing)
+        assertTrue(vm.uiState.value.channelsRefreshing)
+
+        advanceTimeBy(500L)
+        assertFalse(vm.uiState.value.channelsRefreshing)
+        assertTrue(vm.uiState.value.categoriesRefreshing)
+
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.categoriesRefreshing)
+    }
+
+    // 34. Forced same-category refresh keeps old channels visible.
+    @Test
+    fun testForcedSameCategoryRefreshKeepsOldChannelsVisible() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        fake.channelsDelayMs = 1000L
+        vm.loadChannels("prov_1", null, force = true)
+        advanceTimeBy(500L)
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        advanceUntilIdle()
+    }
+
+    // 35. Non-forced same-category reload after completion keeps old channels visible.
+    @Test
+    fun testNonForcedSameCategoryReloadAfterCompletionKeepsOldChannelsVisible() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        fake.channelsDelayMs = 1000L
+        vm.loadChannels("prov_1", null, force = false)
+        advanceTimeBy(500L)
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        advanceUntilIdle()
+    }
+
+    // 36. Different-category request clears old category channels.
+    @Test
+    fun testDifferentCategoryRequestClearsOldCategoryChannels() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
+            channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertEquals(1, vm.uiState.value.channels.size)
+
+        fake.channelsDelayMs = 1000L
+        vm.selectCategory("cat2")
+        advanceTimeBy(100L)
+
+        assertTrue(vm.uiState.value.channels.isEmpty())
+
+        advanceUntilIdle()
+    }
+
+    // 37. Provider change resets category visibility readiness.
+    @Test
+    fun testProviderChangeResetsCategoryVisibilityReadiness() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        fake.observeFlow.emit(listOf(createCategory("cat1", "Category 1")))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.categoryVisibilityReady)
+
+        vm.onProfileChanged(createEnabledProfile("prov_2"))
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
     }
 }

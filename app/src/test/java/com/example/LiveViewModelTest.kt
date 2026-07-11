@@ -1947,6 +1947,9 @@ class LiveViewModelTest {
     fun parental_statusEmitsConfiguredFalse_unlocksSessionAndClosesDialogAndPlaysPending() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
+
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2048,6 +2051,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_nonLocked_playsImmediately() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2072,6 +2077,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_lockedAndParentalDisabled_playsImmediately() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = false)
         )
@@ -2096,6 +2103,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_lockedAndParentalEnabledAndNoPinConfigured_playsImmediately() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2123,6 +2132,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_lockedAndParentalEnabledAndPinConfigured_showsDialogAndStoresPending() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2150,6 +2161,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_parentalSessionUnlocked_playsImmediately() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2189,6 +2202,8 @@ class LiveViewModelTest {
     fun parental_onChannelSelected_notReady_postponesUntilReadyAndPinConfiguredCheck() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2218,6 +2233,8 @@ class LiveViewModelTest {
     fun parental_submitPin_incorrectPin_reportsErrorAndRemainsLocked() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2246,6 +2263,8 @@ class LiveViewModelTest {
     fun parental_submitPin_correctPin_unlocksAndPlaysAndClosesDialog() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2322,6 +2341,8 @@ class LiveViewModelTest {
     fun parental_submitPin_multipleVerificationSubmissionsBlocked() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2352,6 +2373,8 @@ class LiveViewModelTest {
     fun parental_submitPin_verificationJobCancelledOnDismissOrCancel() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2383,6 +2406,8 @@ class LiveViewModelTest {
     fun parental_submitPin_verificationFailureDoesNotDisruptActiveObserver() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2409,6 +2434,8 @@ class LiveViewModelTest {
     fun parental_submitPin_verificationExceptionReportsVerificationErrorAndAllowsRetry() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2436,6 +2463,8 @@ class LiveViewModelTest {
     fun parental_cancelDialog_closesDialogAndClearsPendingAndResetsVerification() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2490,6 +2519,8 @@ class LiveViewModelTest {
     fun parental_statusEmitsConfiguredTrue_maintainsValidSessionUnlockInSameGeneration() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2521,6 +2552,8 @@ class LiveViewModelTest {
     fun parental_visibilityFalse_closesDialogAndClearsPendingAndLocksSession() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2621,6 +2654,8 @@ class LiveViewModelTest {
     fun parental_viewModelCleared_cancelsObservationAndVerification() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2655,6 +2690,8 @@ class LiveViewModelTest {
     fun parental_toggleFavorite_isNeverGatedByPinVerificationState() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(
                 parentalControlEnabled = true,
@@ -2686,6 +2723,8 @@ class LiveViewModelTest {
     fun parental_statusEmitsConfiguredTrue_closesDialogIfAlreadyUnlocked() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2712,6 +2751,8 @@ class LiveViewModelTest {
     fun parental_correctPin_resetsVerificationErrorOnSubsequentOpening() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
         val profile = createEnabledProfile("prov_1").copy(
             features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
         )
@@ -2891,13 +2932,34 @@ class LiveViewModelTest {
     // === REQUIREMENT 8: REAL PLAYBACK-EVENT TESTS ===
 
     @Test
-    fun testLiveVisibleDefaultsToFalse() {
+    fun live_visibility_defaults_to_false() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
-        val field = LiveViewModel::class.java.getDeclaredField("isLiveVisible")
-        field.isAccessible = true
-        val visible = field.get(vm) as Boolean
-        assertTrue("isLiveVisible should default to true in JUnit test environments", visible)
+
+        vm.onProfileChanged(
+            createParentalProfile("provider_1")
+        )
+        runCurrent()
+
+        val events = mutableListOf<LiveEvent>()
+        val collector = launch {
+            vm.events.collect {
+                events += it
+            }
+        }
+        runCurrent()
+
+        vm.onChannelSelected(
+            createChannel(
+                id = "channel_1",
+                name = "Channel 1",
+                categoryId = "category_1"
+            )
+        )
+        runCurrent()
+
+        assertTrue(events.isEmpty())
+        collector.cancel()
     }
 
     @Test
@@ -3730,5 +3792,106 @@ class LiveViewModelTest {
         assertTrue("No playback event should be emitted", collectedEvents.isEmpty())
 
         collectJob.cancel()
+    }
+
+    // === REQUIREMENT 6 ADDITIONS: VISIBILITY TRANSITION TESTS ===
+
+    @Test
+    fun testReturningToLiveEnablesNewSelectionsAgain() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onProfileChanged(createParentalProfile("prov_1"))
+        runCurrent()
+
+        // 1. Initial selection while invisible is blocked
+        val channel = createChannel("ch1", "Channel 1", "cat1")
+        val collected = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { collected.add(it) } }
+        runCurrent()
+
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(collected.isEmpty())
+
+        // 2. Setting visible enables playback
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertEquals(1, collected.size)
+
+        // 3. Setting invisible blocks selection again
+        vm.onLiveVisibilityChanged(false)
+        runCurrent()
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertEquals(1, collected.size) // No new play event emitted
+
+        // 4. Returning to visible enables selection once more
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertEquals(2, collected.size)
+
+        job.cancel()
+    }
+
+    @Test
+    fun testProviderChangeDoesNotAutomaticallyMakeLiveVisible() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        
+        // 1. Initialize first provider, stays invisible
+        vm.onProfileChanged(createParentalProfile("prov_1"))
+        runCurrent()
+        
+        val channel = createChannel("ch1", "Channel 1", "cat1")
+        val collected = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { collected.add(it) } }
+        runCurrent()
+
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(collected.isEmpty())
+
+        // 2. Change provider, stays invisible
+        vm.onProfileChanged(createParentalProfile("prov_2"))
+        runCurrent()
+
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(collected.isEmpty())
+
+        job.cancel()
+    }
+
+    @Test
+    fun testDisablingAndReEnablingLiveFeatureDoesNotAutomaticallyMakeItVisible() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        
+        // 1. Enable live
+        vm.onProfileChanged(createParentalProfile("prov_1", liveTvEnabled = true))
+        runCurrent()
+        
+        // 2. Disable live
+        vm.onProfileChanged(createParentalProfile("prov_1", liveTvEnabled = false))
+        runCurrent()
+
+        // 3. Re-enable live, must still be invisible
+        vm.onProfileChanged(createParentalProfile("prov_1", liveTvEnabled = true))
+        runCurrent()
+
+        val channel = createChannel("ch1", "Channel 1", "cat1")
+        val collected = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { collected.add(it) } }
+        runCurrent()
+
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(collected.isEmpty())
+
+        job.cancel()
     }
 }

@@ -45,15 +45,6 @@ class LiveViewModel(
     private var validPinEnteredForCurrentGeneration = false
     private var isLiveVisible = false
 
-    init {
-        try {
-            Class.forName("org.junit.Test")
-            isLiveVisible = true
-        } catch (e: Exception) {
-            // Keep false
-        }
-    }
-
     private val _events = MutableSharedFlow<LiveEvent>(
         replay = 0,
         extraBufferCapacity = 1,

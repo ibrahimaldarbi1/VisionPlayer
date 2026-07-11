@@ -35,8 +35,12 @@ fun LiveChannelsView(
     repository: IptvRepository,
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
-    favorites: List<FavoriteEntity> = emptyList(),
-    onToggleFavorite: (FavoriteEntity) -> Unit = {},
+    favoritesEnabled: Boolean = false,
+    favoriteChannelIds: Set<String> = emptySet(),
+    favoriteMutationChannelIds: Set<String> = emptySet(),
+    favoritesError: String? = null,
+    onToggleFavorite: (LiveChannel) -> Unit = {},
+    onDismissFavoritesError: () -> Unit = {},
     onStartMultiViewSetup: (() -> Unit)? = null,
     initialLoading: Boolean = false,
     refreshing: Boolean = false,
@@ -236,6 +240,30 @@ fun LiveChannelsView(
             )
         }
 
+        if (favoritesError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .testTag("favorites_error_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Could not update this favorite.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = onDismissFavoritesError,
+                    modifier = Modifier.testTag("dismiss_favorites_error_button")
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Dismiss error")
+                }
+            }
+        }
+
         // Error with cached channels (existing channels > 0)
         if (channelsError != null && channels.isNotEmpty()) {
             Row(
@@ -342,26 +370,17 @@ fun LiveChannelsView(
                 modifier = Modifier.weight(1f)
             ) {
                 items(filteredChannels) { channel ->
-                    val isFav = favorites.any { it.contentId == channel.id && it.contentType == "LIVE" }
+                    val isFav = channel.id in favoriteChannelIds
+                    val favoriteMutationInProgress = channel.id in favoriteMutationChannelIds
                     FocusableItemCard(
                         title = channel.name,
                         imageUrl = channel.logoUrl,
                         subtitle = channel.categoryName,
                         isLocked = channel.isAdult,
                         isFavorite = isFav,
-                        onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                        onFavoriteToggle = if (favoritesEnabled && !favoriteMutationInProgress) {
                             {
-                                onToggleFavorite(
-                                    FavoriteEntity(
-                                        contentId = channel.id,
-                                        contentType = "LIVE",
-                                        title = channel.name,
-                                        posterOrLogo = channel.logoUrl,
-                                        streamUrl = channel.streamUrl,
-                                        categoryId = channel.categoryId,
-                                        categoryName = channel.categoryName
-                                    )
-                                )
+                                onToggleFavorite(channel)
                             }
                         } else null,
                         onClick = {

@@ -59,6 +59,7 @@ import com.example.ui.feature.football.FootballViewModel
 import com.example.ui.feature.football.RepositoryFootballDataSource
 import com.example.ui.feature.live.LiveViewModel
 import com.example.ui.feature.live.RepositoryLiveDataSource
+import com.example.ui.feature.live.RepositoryLiveFavoritesDataSource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.first
@@ -115,13 +116,15 @@ fun HomeScreen(
     val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
 
     // Live ViewModel & States
-    val liveViewModel: LiveViewModel = viewModel(
-        factory = com.example.core.viewmodel.AppViewModelFactory {
+    val liveViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
             LiveViewModel(
-                RepositoryLiveDataSource(repository)
+                dataSource = RepositoryLiveDataSource(repository),
+                favoritesDataSource = RepositoryLiveFavoritesDataSource(repository)
             )
         }
-    )
+    }
+    val liveViewModel: LiveViewModel = viewModel(factory = liveViewModelFactory)
     val liveState by liveViewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(profile) {
@@ -408,8 +411,12 @@ fun HomeScreen(
                             repository = repository,
                             isTv = isTv,
                             profile = profile,
-                            favorites = favorites,
-                            onToggleFavorite = toggleFavorite,
+                            favoritesEnabled = liveState.favoritesEnabled,
+                            favoriteChannelIds = liveState.favoriteChannelIds,
+                            favoriteMutationChannelIds = liveState.favoriteMutationChannelIds,
+                            favoritesError = liveState.favoritesError,
+                            onToggleFavorite = liveViewModel::toggleFavorite,
+                            onDismissFavoritesError = liveViewModel::dismissFavoritesError,
                             onStartMultiViewSetup = {
                                 pendingMultiViewChannels = emptyList() // start fresh
                                 showMultiViewSetup = true

@@ -18,7 +18,12 @@ data class LiveUiState(
     val channelsError: String? = null,
     val hasLoadedCategories: Boolean = false,
     val hasLoadedChannels: Boolean = false,
-    val categoryVisibilityReady: Boolean = false
+    val categoryVisibilityReady: Boolean = false,
+    val favoritesEnabled: Boolean = false,
+    val favoriteChannelIds: Set<String> = emptySet(),
+    val favoriteMutationChannelIds: Set<String> = emptySet(),
+    val favoritesLoading: Boolean = false,
+    val favoritesError: String? = null
 ) {
     val refreshing: Boolean
         get() = categoriesRefreshing || channelsRefreshing

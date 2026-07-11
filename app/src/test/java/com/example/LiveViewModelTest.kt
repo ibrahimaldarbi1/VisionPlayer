@@ -5,6 +5,9 @@ import com.example.data.Category
 import com.example.data.LiveChannel
 import com.example.ui.feature.live.LiveDataSource
 import com.example.ui.feature.live.LiveViewModel
+import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
+import com.example.ui.feature.live.LiveFavoritesDataSource
+import com.example.data.FavoriteEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancelAndJoin
@@ -19,8 +22,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-
-import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
+import java.util.concurrent.CancellationException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -28,10 +30,24 @@ import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
 class LiveViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
+    private val fakeFavorites = FakeLiveFavoritesDataSource()
 
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
+        // Reset fakeFavorites for each test
+        fakeFavorites.observeFavoritesCallCount = 0
+        fakeFavorites.addFavoriteCallCount = 0
+        fakeFavorites.removeFavoriteCallCount = 0
+        fakeFavorites.observeFavoritesDelayMs = 0L
+        fakeFavorites.addFavoriteDelayMs = 0L
+        fakeFavorites.removeFavoriteDelayMs = 0L
+        fakeFavorites.observeFavoritesError = null
+        fakeFavorites.addFavoriteError = null
+        fakeFavorites.removeFavoriteError = null
+        fakeFavorites.lastObserveProviderId = null
+        fakeFavorites.lastAddedChannel = null
+        fakeFavorites.lastRemovedChannelId = null
     }
 
     @After
@@ -143,6 +159,56 @@ class LiveViewModelTest {
         }
     }
 
+    class FakeLiveFavoritesDataSource : LiveFavoritesDataSource {
+        var observeFavoritesCallCount = 0
+        var addFavoriteCallCount = 0
+        var removeFavoriteCallCount = 0
+
+        var observeFavoritesDelayMs: Long = 0L
+        var addFavoriteDelayMs: Long = 0L
+        var removeFavoriteDelayMs: Long = 0L
+
+        var observeFavoritesError: Throwable? = null
+        var addFavoriteError: Throwable? = null
+        var removeFavoriteError: Throwable? = null
+
+        val observeFlow = kotlinx.coroutines.flow.MutableSharedFlow<List<FavoriteEntity>>(replay = 1)
+        var lastObserveProviderId: String? = null
+        var lastAddedChannel: LiveChannel? = null
+        var lastRemovedChannelId: String? = null
+
+        override fun observeLiveFavorites(providerId: String): Flow<List<FavoriteEntity>> = flow {
+            observeFavoritesCallCount++
+            lastObserveProviderId = providerId
+            if (observeFavoritesDelayMs > 0) {
+                delay(observeFavoritesDelayMs)
+            }
+            observeFavoritesError?.let { throw it }
+            observeFlow.collect { 
+                observeFavoritesError?.let { throw it }
+                emit(it) 
+            }
+        }
+
+        override suspend fun addLiveFavorite(channel: LiveChannel) {
+            addFavoriteCallCount++
+            lastAddedChannel = channel
+            if (addFavoriteDelayMs > 0) {
+                delay(addFavoriteDelayMs)
+            }
+            addFavoriteError?.let { throw it }
+        }
+
+        override suspend fun removeLiveFavorite(channelId: String) {
+            removeFavoriteCallCount++
+            lastRemovedChannelId = channelId
+            if (removeFavoriteDelayMs > 0) {
+                delay(removeFavoriteDelayMs)
+            }
+            removeFavoriteError?.let { throw it }
+        }
+    }
+
     private fun createCategory(id: String, name: String, type: String = "LIVE"): Category {
         return Category(id = id, name = name, type = type)
     }
@@ -214,7 +280,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             categoriesEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -228,7 +294,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -241,7 +307,7 @@ class LiveViewModelTest {
     @Test
     fun testDisabledProfileMakesNoRequest() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createDisabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -257,7 +323,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -286,7 +352,7 @@ class LiveViewModelTest {
             categoriesDelayMs = 1000L
             categoriesEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(500L)
 
@@ -303,7 +369,7 @@ class LiveViewModelTest {
             channelsDelayMs = 1000L
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(500L)
 
@@ -327,7 +393,7 @@ class LiveViewModelTest {
             observeResultsByProvider["prov_new"] = listOf(listOf(createCategory("cat_new", "Category New")))
             observeResultsByProvider["prov_old"] = listOf(listOf(createCategory("cat_old", "Category Old")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_old"))
         advanceTimeBy(500L) // prov_old is still loading categories
 
@@ -353,7 +419,7 @@ class LiveViewModelTest {
             observeResultsByProvider["prov_new"] = listOf(listOf(createCategory("cat1", "Category 1")))
             observeResultsByProvider["prov_old"] = listOf(listOf(createCategory("cat1", "Category 1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_old"))
         advanceTimeBy(500L) // prov_old channels are still loading
 
@@ -371,7 +437,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -387,7 +453,7 @@ class LiveViewModelTest {
                 listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -404,7 +470,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -421,7 +487,7 @@ class LiveViewModelTest {
                 listOf(createChannel("chan1", "Channel 1", "cat1"), createChannel("chan2", "Channel 2", "cat1"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -437,7 +503,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -458,7 +524,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -473,7 +539,7 @@ class LiveViewModelTest {
     @Test
     fun testChangingCategoryDoesNotTriggerMoviesOrSeriesWork() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -482,14 +548,13 @@ class LiveViewModelTest {
         advanceUntilIdle()
 
         assertEquals(initialChannelsCount + 1, fake.channelsCallCount)
-        // Verified: LiveViewModel only interacts with LiveDataSource
     }
 
     // 16. Same-category selection does nothing.
     @Test
     fun testSameCategorySelectionDoesNothing() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -512,7 +577,7 @@ class LiveViewModelTest {
             channelDelayByRequest[Pair("prov_1", "cat2")] = 100L
             channelResultsByRequest[Pair("prov_1", "cat2")] = listOf(listOf(createChannel("chan_new", "New Channel", "cat2")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle() // loads initial null category channels
 
@@ -537,7 +602,7 @@ class LiveViewModelTest {
             channelsDelayMs = 500L
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(100L)
 
@@ -554,7 +619,7 @@ class LiveViewModelTest {
             channelsDelayMs = 500L
             channelsError = RuntimeException("Error")
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(100L)
 
@@ -571,7 +636,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -594,7 +659,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             categoriesError = RuntimeException("Server breakdown")
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -607,7 +672,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             channelsError = RuntimeException("Server breakdown")
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -621,7 +686,7 @@ class LiveViewModelTest {
             channelsDelayMs = 1000L
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(500L)
 
@@ -635,7 +700,7 @@ class LiveViewModelTest {
     @Test
     fun testRetryCategoriesStartsOneNewRequest() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -650,7 +715,7 @@ class LiveViewModelTest {
     @Test
     fun testRetryChannelsStartsOneNewRequest() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -665,7 +730,7 @@ class LiveViewModelTest {
     @Test
     fun testInvisibleCategoriesResetInvalidSelectedCategory() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -693,7 +758,7 @@ class LiveViewModelTest {
             categoriesDelayMs = 1000L
             observeDelayMs = 1000L
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceTimeBy(500L)
 
@@ -713,7 +778,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -728,7 +793,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1"), createChannel("chan2", "Channel 2", "cat2")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -749,7 +814,7 @@ class LiveViewModelTest {
             observeError = RuntimeException("Connection failed")
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -762,7 +827,7 @@ class LiveViewModelTest {
     @Test
     fun testAllCategoriesHiddenAfterReadiness() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -787,7 +852,7 @@ class LiveViewModelTest {
     @Test
     fun testHiddenSelectedCategoryResetsToAllChannels() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -811,7 +876,7 @@ class LiveViewModelTest {
             categoriesEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -840,7 +905,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -862,7 +927,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -884,7 +949,7 @@ class LiveViewModelTest {
             observeEmissions = listOf(listOf(createCategory("cat1", "Category 1"), createCategory("cat2", "Category 2")))
             channelsEmissions = listOf(listOf(createChannel("chan1", "Channel 1", "cat1")))
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -903,7 +968,7 @@ class LiveViewModelTest {
     @Test
     fun testProviderChangeResetsCategoryVisibilityReadiness() = runTest {
         val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -928,7 +993,7 @@ class LiveViewModelTest {
                 listOf(createChannel("chan1", "Channel 1", "cat1"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -949,7 +1014,7 @@ class LiveViewModelTest {
                 listOf(createChannel("chan1", "Channel 1", "cat1"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -966,7 +1031,7 @@ class LiveViewModelTest {
                 listOf(createChannel("chan1", "Channel 1", "cat1"), createChannel("chan2", "Channel 2", "cat2"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -997,7 +1062,7 @@ class LiveViewModelTest {
                 listOf(createChannel("chan1", "Channel 1", "cat1"))
             )
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -1015,7 +1080,7 @@ class LiveViewModelTest {
         val fake = FakeLiveDataSource().apply {
             categoriesError = RuntimeException("Load failed")
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_1"))
         advanceUntilIdle()
 
@@ -1047,7 +1112,7 @@ class LiveViewModelTest {
             )
             observeDelayByProvider["prov_old"] = 1000L
         }
-        val vm = LiveViewModel(fake)
+        val vm = LiveViewModel(fake, fakeFavorites)
         vm.onProfileChanged(createEnabledProfile("prov_old"))
         advanceTimeBy(500L) // prov_old is still waiting for delay to complete
 
@@ -1057,5 +1122,379 @@ class LiveViewModelTest {
 
         // The UI should NOT be ready because prov_old's delayed emission should be ignored
         assertFalse(vm.uiState.value.categoryVisibilityReady)
+    }
+
+    // --- NEW TESTS ---
+
+    @Test
+    fun testLiveDisabledCleansUpFavorites() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        // Start as enabled with favorites
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Toggle favorite to create mutation state
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L // delayed mutation
+        vm.toggleFavorite(channel)
+        advanceTimeBy(100L)
+        
+        // Confirm there is an active mutation and favorited ID
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        
+        // Now disable Live
+        vm.onProfileChanged(createDisabledProfile("prov_1"))
+        advanceUntilIdle()
+        
+        val state = vm.uiState.value
+        assertFalse(state.favoritesEnabled)
+        assertTrue(state.favoriteChannelIds.isEmpty())
+        assertTrue(state.favoriteMutationChannelIds.isEmpty())
+        assertNull(state.favoritesError)
+        assertFalse(state.favoritesLoading)
+    }
+
+    @Test
+    fun testFavoritesDisabledCleansUpButDoesNotReload() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val catCallCountBefore = fake.categoriesCallCount
+        val chanCallCountBefore = fake.channelsCallCount
+        
+        // Now disable favorites only
+        val disabledFavProfile = profile.copy(
+            features = profile.features.copy(
+                favoritesEnabled = false
+            )
+        )
+        vm.onProfileChanged(disabledFavProfile)
+        advanceUntilIdle()
+        
+        // Verify no extra category or channel loads
+        assertEquals(catCallCountBefore, fake.categoriesCallCount)
+        assertEquals(chanCallCountBefore, fake.channelsCallCount)
+        
+        // Verify favorites state is cleared
+        val state = vm.uiState.value
+        assertFalse(state.favoritesEnabled)
+        assertTrue(state.favoriteChannelIds.isEmpty())
+        assertTrue(state.favoriteMutationChannelIds.isEmpty())
+        assertNull(state.favoritesError)
+    }
+
+    @Test
+    fun testTransitionFavoritesEnabledLaunchesObserver() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        // Favorites initially disabled
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = false
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        assertEquals(0, fakeFavorites.observeFavoritesCallCount)
+        assertFalse(vm.uiState.value.favoritesEnabled)
+        
+        // Enable favorites
+        val enabledProfile = profile.copy(
+            features = profile.features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(enabledProfile)
+        advanceUntilIdle()
+        
+        assertEquals(1, fakeFavorites.observeFavoritesCallCount)
+        assertTrue(vm.uiState.value.favoritesEnabled)
+    }
+
+    @Test
+    fun testProviderChangeClearsAndStartsNewFavoritesObserver() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile1 = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile1)
+        advanceUntilIdle()
+        
+        // Emit favorites for prov_1
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertEquals(1, fakeFavorites.observeFavoritesCallCount)
+        
+        // Change provider
+        fakeFavorites.observeFlow.resetReplayCache()
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        // Verify state is cleared
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertEquals(2, fakeFavorites.observeFavoritesCallCount)
+    }
+
+    @Test
+    fun testToggleFavoriteOptimisticUpdateAndCall() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel)
+        
+        // Verify optimistic addition
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        
+        advanceUntilIdle()
+        assertEquals(1, fakeFavorites.addFavoriteCallCount)
+    }
+
+    @Test
+    fun testToggleFavoriteIgnoresRedundantCallsWhilePending() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel)
+        vm.toggleFavorite(channel) // redundant call
+        
+        advanceUntilIdle()
+        assertEquals(1, fakeFavorites.addFavoriteCallCount)
+    }
+
+    @Test
+    fun testMutationSuccessRetainsStateAndClearsIndicator() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        
+        // Wait for completion
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        assertNull(vm.uiState.value.favoritesError)
+    }
+
+    @Test
+    fun testMutationFailureRevertsAndShowsError() = runTest {
+        val fake = FakeLiveDataSource()
+        fakeFavorites.addFavoriteError = RuntimeException("Failed")
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        
+        advanceUntilIdle()
+        
+        // Reverted
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        assertEquals("Could not update this favorite.", vm.uiState.value.favoritesError)
+    }
+
+    @Test
+    fun testMutationCancellationRevertsStateAndShowsNoError() = runTest {
+        val fake = FakeLiveDataSource()
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        
+        // Cancel favorite work via disabling favorites before delay finishes
+        val disabledProfile = profile.copy(
+            features = profile.features.copy(favoritesEnabled = false)
+        )
+        vm.onProfileChanged(disabledProfile)
+        advanceUntilIdle()
+        
+        // State should be reverted and cleared of errors/indicators
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        assertNull(vm.uiState.value.favoritesError)
+    }
+
+    @Test
+    fun testOldProviderMutationCompletionIgnored() = runTest {
+        val fake = FakeLiveDataSource()
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile1 = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile1)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        
+        // Change provider before mutation finishes
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        // Current state (prov_2) should not have chan1 as favorite or mutation
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        assertNull(vm.uiState.value.favoritesError)
+    }
+
+    @Test
+    fun testEstablishedObserverFailureRetainsLastKnownFavorites() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        
+        // Trigger error in observer
+        fakeFavorites.observeFavoritesError = RuntimeException("Error")
+        fakeFavorites.observeFlow.emit(emptyList()) // trigger collect emission
+        advanceUntilIdle()
+        
+        // Favorites should still contain chan1 (retains last known)
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertEquals("Could not load Live TV favorites.", vm.uiState.value.favoritesError)
+        assertFalse(vm.uiState.value.favoritesLoading)
+    }
+
+    @Test
+    fun testDismissFavoritesError() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Inject failure
+        fakeFavorites.observeFavoritesError = RuntimeException("Error")
+        fakeFavorites.observeFlow.emit(emptyList())
+        advanceUntilIdle()
+        
+        assertEquals("Could not load Live TV favorites.", vm.uiState.value.favoritesError)
+        
+        vm.dismissFavoritesError()
+        assertNull(vm.uiState.value.favoritesError)
+    }
+
+    @Test
+    fun testActiveJobsCancelledOnCleared() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val onClearedMethod = vm::class.java.getDeclaredMethod("onCleared")
+        onClearedMethod.isAccessible = true
+        onClearedMethod.invoke(vm)
+        
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.favoritesLoading)
     }
 }

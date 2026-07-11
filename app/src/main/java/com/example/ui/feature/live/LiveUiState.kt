@@ -23,8 +23,12 @@ data class LiveUiState(
     val favoriteChannelIds: Set<String> = emptySet(),
     val favoriteMutationChannelIds: Set<String> = emptySet(),
     val favoritesLoading: Boolean = false,
-    val favoritesError: String? = null
+    val favoritesLoadError: String? = null,
+    val favoriteMutationError: String? = null
 ) {
+    val favoritesError: String?
+        get() = favoriteMutationError ?: favoritesLoadError
+
     val refreshing: Boolean
         get() = categoriesRefreshing || channelsRefreshing
 }

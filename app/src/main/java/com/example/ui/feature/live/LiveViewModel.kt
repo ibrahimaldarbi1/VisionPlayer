@@ -6,6 +6,7 @@ import com.example.config.ProviderProfile
 import com.example.data.Category
 import com.example.data.LiveChannel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +33,47 @@ class LiveViewModel(
     private var categoriesGeneration: Long = 0L
     private var channelsGeneration: Long = 0L
     private var favoritesGeneration: Long = 0L
+
+    private var persistedFavoriteChannelIds: Set<String> = emptySet()
+
+    private data class PendingFavoriteMutation(
+        val channelId: String,
+        val desiredFavorite: Boolean,
+        val providerId: String,
+        val generation: Long
+    )
+
+    private val pendingFavoriteMutations = mutableMapOf<String, PendingFavoriteMutation>()
+
+    private fun mergedFavoriteChannelIds(): Set<String> {
+        var result = persistedFavoriteChannelIds
+
+        pendingFavoriteMutations.values
+            .filter {
+                it.providerId == currentProviderId &&
+                it.generation == favoritesGeneration
+            }
+            .forEach { mutation ->
+                result = if (mutation.desiredFavorite) {
+                    result + mutation.channelId
+                } else {
+                    result - mutation.channelId
+                }
+            }
+
+        return result
+    }
+
+    private fun removePendingMutationIfCurrent(
+        mutation: PendingFavoriteMutation
+    ): Boolean {
+        val current = pendingFavoriteMutations[mutation.channelId]
+        if (current == mutation) {
+            pendingFavoriteMutations.remove(mutation.channelId)
+            return true
+        }
+        return false
+    }
 
     private data class ChannelRequestKey(
         val providerId: String,
@@ -69,6 +111,7 @@ class LiveViewModel(
             cancelFavoriteMutations(clearState = true)
             rawChannels = emptyList()
             currentProviderId = null
+            persistedFavoriteChannelIds = emptySet()
             _uiState.update { currentState ->
                 currentState.copy(
                     featureEnabled = false,
@@ -90,7 +133,8 @@ class LiveViewModel(
                     favoriteChannelIds = emptySet(),
                     favoriteMutationChannelIds = emptySet(),
                     favoritesLoading = false,
-                    favoritesError = null
+                    favoritesLoadError = null,
+                    favoriteMutationError = null
                 )
             }
             return
@@ -106,9 +150,9 @@ class LiveViewModel(
             cancelChannelsLoad(clearLoading = true)
 
             // Provider changed favorite cleanup
-            favoritesGeneration++
             cancelFavoritesObserver(clearLoading = true)
             cancelFavoriteMutations(clearState = true)
+            persistedFavoriteChannelIds = emptySet()
 
             // Clear old provider channels and categories
             rawChannels = emptyList()
@@ -133,7 +177,8 @@ class LiveViewModel(
                     favoritesEnabled = favoritesEnabled,
                     favoriteChannelIds = emptySet(),
                     favoriteMutationChannelIds = emptySet(),
-                    favoritesError = null
+                    favoritesLoadError = null,
+                    favoriteMutationError = null
                 )
             }
 
@@ -166,11 +211,13 @@ class LiveViewModel(
                 } else {
                     cancelFavoritesObserver(clearLoading = true)
                     cancelFavoriteMutations(clearState = true)
+                    persistedFavoriteChannelIds = emptySet()
                     _uiState.update { currentState ->
                         currentState.copy(
                             favoriteChannelIds = emptySet(),
                             favoriteMutationChannelIds = emptySet(),
-                            favoritesError = null
+                            favoritesLoadError = null,
+                            favoriteMutationError = null
                         )
                     }
                 }
@@ -464,7 +511,7 @@ class LiveViewModel(
         _uiState.update { currentState ->
             currentState.copy(
                 favoritesLoading = true,
-                favoritesError = null
+                favoritesLoadError = null
             )
         }
 
@@ -475,12 +522,12 @@ class LiveViewModel(
                         return@collect
                     }
 
-                    val ids = favorites.map { it.contentId }.toSet()
+                    persistedFavoriteChannelIds = favorites.map { it.contentId }.toSet()
                     _uiState.update { currentState ->
                         currentState.copy(
-                            favoriteChannelIds = ids,
+                            favoriteChannelIds = mergedFavoriteChannelIds(),
                             favoritesLoading = false,
-                            favoritesError = null
+                            favoritesLoadError = null
                         )
                     }
                 }
@@ -490,7 +537,7 @@ class LiveViewModel(
                 if (favoritesGeneration == requestGeneration && currentProviderId == providerId && _uiState.value.favoritesEnabled) {
                     _uiState.update { currentState ->
                         currentState.copy(
-                            favoritesError = "Could not load Live TV favorites.",
+                            favoritesLoadError = "Could not load Live TV favorites.",
                             favoritesLoading = false
                         )
                     }
@@ -504,28 +551,32 @@ class LiveViewModel(
         if (!_uiState.value.featureEnabled || !_uiState.value.favoritesEnabled || providerId == null) {
             return
         }
-        if (channel.id in _uiState.value.favoriteMutationChannelIds) {
+        if (pendingFavoriteMutations.containsKey(channel.id)) {
             return
         }
 
-        val wasFavorite = channel.id in _uiState.value.favoriteChannelIds
+        val wasFavorite = channel.id in mergedFavoriteChannelIds()
+        val desiredFavorite = !wasFavorite
         val requestGeneration = favoritesGeneration
 
-        // Optimistic State Update
+        val mutation = PendingFavoriteMutation(
+            channelId = channel.id,
+            desiredFavorite = desiredFavorite,
+            providerId = providerId,
+            generation = requestGeneration
+        )
+
+        pendingFavoriteMutations[channel.id] = mutation
+
         _uiState.update { currentState ->
-            val updatedFavorites = if (wasFavorite) {
-                currentState.favoriteChannelIds - channel.id
-            } else {
-                currentState.favoriteChannelIds + channel.id
-            }
             currentState.copy(
-                favoriteChannelIds = updatedFavorites,
-                favoriteMutationChannelIds = currentState.favoriteMutationChannelIds + channel.id
+                favoriteChannelIds = mergedFavoriteChannelIds(),
+                favoriteMutationChannelIds = pendingFavoriteMutations.keys.toSet()
             )
         }
 
-        // Launch mutation job
-        val job = viewModelScope.launch {
+        lateinit var mutationJob: Job
+        mutationJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 if (wasFavorite) {
                     favoritesDataSource.removeLiveFavorite(channel.id)
@@ -534,58 +585,58 @@ class LiveViewModel(
                 }
 
                 if (favoritesGeneration == requestGeneration && currentProviderId == providerId) {
+                    persistedFavoriteChannelIds = if (desiredFavorite) {
+                        persistedFavoriteChannelIds + channel.id
+                    } else {
+                        persistedFavoriteChannelIds - channel.id
+                    }
                     _uiState.update { currentState ->
                         currentState.copy(
-                            favoriteMutationChannelIds = currentState.favoriteMutationChannelIds - channel.id,
-                            favoritesError = null
+                            favoriteMutationError = null
                         )
                     }
                 }
             } catch (e: CancellationException) {
-                if (favoritesGeneration == requestGeneration && currentProviderId == providerId) {
-                    _uiState.update { currentState ->
-                        val revertedFavorites = if (wasFavorite) {
-                            currentState.favoriteChannelIds + channel.id
-                        } else {
-                            currentState.favoriteChannelIds - channel.id
-                        }
-                        currentState.copy(
-                            favoriteChannelIds = revertedFavorites,
-                            favoriteMutationChannelIds = currentState.favoriteMutationChannelIds - channel.id
-                        )
-                    }
-                }
                 throw e
             } catch (t: Throwable) {
                 if (favoritesGeneration == requestGeneration && currentProviderId == providerId) {
                     _uiState.update { currentState ->
-                        val revertedFavorites = if (wasFavorite) {
-                            currentState.favoriteChannelIds + channel.id
-                        } else {
-                            currentState.favoriteChannelIds - channel.id
-                        }
                         currentState.copy(
-                            favoriteChannelIds = revertedFavorites,
-                            favoriteMutationChannelIds = currentState.favoriteMutationChannelIds - channel.id,
-                            favoritesError = "Could not update this favorite."
+                            favoriteMutationError = "Could not update this favorite."
                         )
                     }
                 }
             } finally {
-                favoriteMutationJobs.remove(channel.id)
+                val isCurrent = favoritesGeneration == requestGeneration && currentProviderId == providerId
+                val removed = if (isCurrent) removePendingMutationIfCurrent(mutation) else false
+                if (removed) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            favoriteChannelIds = mergedFavoriteChannelIds(),
+                            favoriteMutationChannelIds = pendingFavoriteMutations.keys.toSet()
+                        )
+                    }
+                }
+                if (favoriteMutationJobs[channel.id] === mutationJob) {
+                    favoriteMutationJobs.remove(channel.id)
+                }
             }
         }
 
-        favoriteMutationJobs[channel.id] = job
+        favoriteMutationJobs[channel.id] = mutationJob
+        mutationJob.start()
     }
 
     private fun cancelFavoriteMutations(clearState: Boolean) {
         favoritesGeneration++
-        favoriteMutationJobs.values.forEach { it.cancel() }
+        val jobsToCancel = favoriteMutationJobs.values.toList()
         favoriteMutationJobs.clear()
+        pendingFavoriteMutations.clear()
+        jobsToCancel.forEach { it.cancel() }
         if (clearState) {
             _uiState.update { currentState ->
                 currentState.copy(
+                    favoriteChannelIds = if (currentState.favoritesEnabled && currentProviderId != null) mergedFavoriteChannelIds() else emptySet(),
                     favoriteMutationChannelIds = emptySet()
                 )
             }
@@ -606,7 +657,8 @@ class LiveViewModel(
     fun dismissFavoritesError() {
         _uiState.update { currentState ->
             currentState.copy(
-                favoritesError = null
+                favoritesLoadError = null,
+                favoriteMutationError = null
             )
         }
     }

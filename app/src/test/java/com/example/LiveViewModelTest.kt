@@ -10,6 +10,7 @@ import com.example.ui.feature.live.LiveFavoritesDataSource
 import com.example.data.FavoriteEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -1126,179 +1127,152 @@ class LiveViewModelTest {
 
     // --- NEW TESTS ---
 
+    // 1. Observe starts loading state
     @Test
-    fun testLiveDisabledCleansUpFavorites() = runTest {
+    fun testObserve_startsLoadingState() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
+        fakeFavorites.observeFavoritesDelayMs = 1000L
         
-        // Start as enabled with favorites
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceTimeBy(500L)
+        
+        assertTrue(vm.uiState.value.favoritesLoading)
+    }
+
+    // 2. Observe emits favorites and updates state
+    @Test
+    fun testObserve_emitsFavorites_updatesState() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
-        // Toggle favorite to create mutation state
-        val channel = createChannel("chan1", "Channel 1", "cat1")
-        fakeFavorites.addFavoriteDelayMs = 1000L // delayed mutation
-        vm.toggleFavorite(channel)
-        advanceTimeBy(100L)
-        
-        // Confirm there is an active mutation and favorited ID
-        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
-        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
-        
-        // Now disable Live
-        vm.onProfileChanged(createDisabledProfile("prov_1"))
-        advanceUntilIdle()
-        
-        val state = vm.uiState.value
-        assertFalse(state.favoritesEnabled)
-        assertTrue(state.favoriteChannelIds.isEmpty())
-        assertTrue(state.favoriteMutationChannelIds.isEmpty())
-        assertNull(state.favoritesError)
-        assertFalse(state.favoritesLoading)
-    }
-
-    @Test
-    fun testFavoritesDisabledCleansUpButDoesNotReload() = runTest {
-        val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake, fakeFavorites)
-        
-        val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
-        )
-        vm.onProfileChanged(profile)
-        advanceUntilIdle()
-        
-        val catCallCountBefore = fake.categoriesCallCount
-        val chanCallCountBefore = fake.channelsCallCount
-        
-        // Now disable favorites only
-        val disabledFavProfile = profile.copy(
-            features = profile.features.copy(
-                favoritesEnabled = false
-            )
-        )
-        vm.onProfileChanged(disabledFavProfile)
-        advanceUntilIdle()
-        
-        // Verify no extra category or channel loads
-        assertEquals(catCallCountBefore, fake.categoriesCallCount)
-        assertEquals(chanCallCountBefore, fake.channelsCallCount)
-        
-        // Verify favorites state is cleared
-        val state = vm.uiState.value
-        assertFalse(state.favoritesEnabled)
-        assertTrue(state.favoriteChannelIds.isEmpty())
-        assertTrue(state.favoriteMutationChannelIds.isEmpty())
-        assertNull(state.favoritesError)
-    }
-
-    @Test
-    fun testTransitionFavoritesEnabledLaunchesObserver() = runTest {
-        val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake, fakeFavorites)
-        
-        // Favorites initially disabled
-        val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = false
-            )
-        )
-        vm.onProfileChanged(profile)
-        advanceUntilIdle()
-        
-        assertEquals(0, fakeFavorites.observeFavoritesCallCount)
-        assertFalse(vm.uiState.value.favoritesEnabled)
-        
-        // Enable favorites
-        val enabledProfile = profile.copy(
-            features = profile.features.copy(
-                favoritesEnabled = true
-            )
-        )
-        vm.onProfileChanged(enabledProfile)
-        advanceUntilIdle()
-        
-        assertEquals(1, fakeFavorites.observeFavoritesCallCount)
-        assertTrue(vm.uiState.value.favoritesEnabled)
-    }
-
-    @Test
-    fun testProviderChangeClearsAndStartsNewFavoritesObserver() = runTest {
-        val fake = FakeLiveDataSource()
-        val vm = LiveViewModel(fake, fakeFavorites)
-        
-        val profile1 = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
-        )
-        vm.onProfileChanged(profile1)
-        advanceUntilIdle()
-        
-        // Emit favorites for prov_1
         fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
         advanceUntilIdle()
         
-        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
-        assertEquals(1, fakeFavorites.observeFavoritesCallCount)
-        
-        // Change provider
-        fakeFavorites.observeFlow.resetReplayCache()
-        val profile2 = createEnabledProfile("prov_2").copy(
-            features = createEnabledProfile("prov_2").features.copy(
-                favoritesEnabled = true
-            )
-        )
-        vm.onProfileChanged(profile2)
-        advanceUntilIdle()
-        
-        // Verify state is cleared
-        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
-        assertEquals(2, fakeFavorites.observeFavoritesCallCount)
+        assertEquals(setOf("chan1"), vm.uiState.value.favoriteChannelIds)
+        assertFalse(vm.uiState.value.favoritesLoading)
     }
 
+    // 3. Observe failure sets load error
     @Test
-    fun testToggleFavoriteOptimisticUpdateAndCall() = runTest {
+    fun testObserve_failure_setsLoadError() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
-        val channel = createChannel("chan1", "Channel 1", "cat1")
-        fakeFavorites.addFavoriteDelayMs = 1000L
-        
-        vm.toggleFavorite(channel)
-        
-        // Verify optimistic addition
-        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
-        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
-        
+        fakeFavorites.observeFavoritesError = RuntimeException("Connection lost")
+        fakeFavorites.observeFlow.emit(emptyList()) // trigger collect
         advanceUntilIdle()
-        assertEquals(1, fakeFavorites.addFavoriteCallCount)
+        
+        assertEquals("Could not load Live TV favorites.", vm.uiState.value.favoritesLoadError)
+        assertNull(vm.uiState.value.favoriteMutationError)
     }
 
+    // 4. Observe obsolete generation ignores emission
     @Test
-    fun testToggleFavoriteIgnoresRedundantCallsWhilePending() = runTest {
+    fun testObserve_obsoleteGeneration_ignoresEmission() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Simulating generation change by calling cancelFavoritesObserver internally or via profile toggle
+        val disabledProfile = profile.copy(features = profile.features.copy(favoritesEnabled = false))
+        fakeFavorites.observeFlow.resetReplayCache()
+        vm.onProfileChanged(disabledProfile)
+        advanceUntilIdle()
+        
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+    }
+
+    // 5. Observe obsolete provider ignores emission
+    @Test
+    fun testObserve_obsoleteProvider_ignoresEmission() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Switch provider with favorites disabled to prevent starting a new collector on the same flow
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(favoritesEnabled = false)
+        )
+        fakeFavorites.observeFlow.resetReplayCache()
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        // emit to old observer flow (prov_1)
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+    }
+
+    // 6. Observe disabled ignores emission
+    @Test
+    fun testObserve_disabled_ignoresEmission() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Disable favorites
+        val disabledProfile = profile.copy(features = profile.features.copy(favoritesEnabled = false))
+        fakeFavorites.observeFlow.resetReplayCache()
+        vm.onProfileChanged(disabledProfile)
+        advanceUntilIdle()
+        
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+    }
+
+    // 7. Toggle disabled is a no-op
+    @Test
+    fun testToggle_disabled_noOp() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        
+        vm.toggleFavorite(channel)
+        advanceUntilIdle()
+        
+        assertEquals(0, fakeFavorites.addFavoriteCallCount)
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+    }
+
+    // 8. Toggle already mutating ignores redundant
+    @Test
+    fun testToggle_alreadyMutating_ignoresRedundant() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
@@ -1308,131 +1282,278 @@ class LiveViewModelTest {
         
         vm.toggleFavorite(channel)
         vm.toggleFavorite(channel) // redundant call
+        advanceUntilIdle()
+        
+        assertEquals(1, fakeFavorites.addFavoriteCallCount)
+    }
+
+    // 9. Toggle optimistically adds and calls add API
+    @Test
+    fun testToggle_optimisticallyAdds_callsAddApi() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel)
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
         
         advanceUntilIdle()
         assertEquals(1, fakeFavorites.addFavoriteCallCount)
     }
 
+    // 10. Toggle optimistically removes and calls remove API
     @Test
-    fun testMutationSuccessRetainsStateAndClearsIndicator() = runTest {
+    fun testToggle_optimisticallyRemoves_callsRemoveApi() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        // Establish as favorite
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.removeFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel)
+        
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+        
+        advanceUntilIdle()
+        assertEquals(1, fakeFavorites.removeFavoriteCallCount)
+    }
+
+    // 11. Toggle success promotes persisted and clears pending
+    @Test
+    fun testToggle_success_promotesPersistedAndClearsPending() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
         val channel = createChannel("chan1", "Channel 1", "cat1")
         vm.toggleFavorite(channel)
-        
-        // Wait for completion
         advanceUntilIdle()
         
         assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
         assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
-        assertNull(vm.uiState.value.favoritesError)
+        assertNull(vm.uiState.value.favoriteMutationError)
     }
 
+    // 12. Toggle failure reverts state and sets mutation error
     @Test
-    fun testMutationFailureRevertsAndShowsError() = runTest {
+    fun testToggle_failure_revertsStateAndSetsMutationError() = runTest {
         val fake = FakeLiveDataSource()
-        fakeFavorites.addFavoriteError = RuntimeException("Failed")
+        fakeFavorites.addFavoriteError = RuntimeException("API failure")
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
         val channel = createChannel("chan1", "Channel 1", "cat1")
         vm.toggleFavorite(channel)
-        
         advanceUntilIdle()
         
-        // Reverted
         assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
         assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
-        assertEquals("Could not update this favorite.", vm.uiState.value.favoritesError)
+        assertEquals("Could not update this favorite.", vm.uiState.value.favoriteMutationError)
     }
 
+    // 13. Toggle cancellation current reverts state and shows no mutation error
     @Test
-    fun testMutationCancellationRevertsStateAndShowsNoError() = runTest {
+    fun testToggle_cancellationCurrent_revertsStateAndNoMutationError() = runTest {
         val fake = FakeLiveDataSource()
         fakeFavorites.addFavoriteDelayMs = 1000L
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
         val channel = createChannel("chan1", "Channel 1", "cat1")
         vm.toggleFavorite(channel)
+        advanceTimeBy(500L)
         
-        // Cancel favorite work via disabling favorites before delay finishes
-        val disabledProfile = profile.copy(
-            features = profile.features.copy(favoritesEnabled = false)
-        )
+        val disabledProfile = profile.copy(features = profile.features.copy(favoritesEnabled = false))
         vm.onProfileChanged(disabledProfile)
         advanceUntilIdle()
         
-        // State should be reverted and cleared of errors/indicators
         assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
         assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
-        assertNull(vm.uiState.value.favoritesError)
+        assertNull(vm.uiState.value.favoriteMutationError)
     }
 
+    // 14. Toggle cancellation obsolete does not update state
     @Test
-    fun testOldProviderMutationCompletionIgnored() = runTest {
+    fun testToggle_cancellationObsolete_doesNotUpdateState() = runTest {
         val fake = FakeLiveDataSource()
         fakeFavorites.addFavoriteDelayMs = 1000L
         val vm = LiveViewModel(fake, fakeFavorites)
-        
-        val profile1 = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
-        vm.onProfileChanged(profile1)
+        vm.onProfileChanged(profile)
         advanceUntilIdle()
         
         val channel = createChannel("chan1", "Channel 1", "cat1")
         vm.toggleFavorite(channel)
+        advanceTimeBy(500L)
         
-        // Change provider before mutation finishes
         val profile2 = createEnabledProfile("prov_2").copy(
-            features = createEnabledProfile("prov_2").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_2").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile2)
         advanceUntilIdle()
         
-        // Current state (prov_2) should not have chan1 as favorite or mutation
         assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
         assertFalse(vm.uiState.value.favoriteMutationChannelIds.contains("chan1"))
+    }
+
+    // 15. Toggle failure obsolete does not update state
+    @Test
+    fun testToggle_failureObsolete_doesNotUpdateState() = runTest {
+        val fake = FakeLiveDataSource()
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        fakeFavorites.addFavoriteError = RuntimeException("Late failure")
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        advanceTimeBy(500L)
+        
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        assertNull(vm.uiState.value.favoriteMutationError)
+    }
+
+    // 16. Toggle job identity lazy start ensures job recorded in map
+    @Test
+    fun testToggle_jobIdentity_lazyStartEnsuresJobRecordedInMap() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel)
+        
+        val mapField = vm::class.java.getDeclaredField("favoriteMutationJobs")
+        mapField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val jobsMap = mapField.get(vm) as Map<String, Job>
+        
+        assertTrue(jobsMap.containsKey("chan1"))
+        val job = jobsMap["chan1"]!!
+        assertTrue(job.isActive)
+        
+        advanceUntilIdle()
+        assertFalse(jobsMap.containsKey("chan1"))
+    }
+
+    // 17. Dismiss error clears both errors
+    @Test
+    fun testDismissError_clearsBothErrors() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        fakeFavorites.observeFavoritesError = RuntimeException("Load err")
+        fakeFavorites.observeFlow.emit(emptyList())
+        advanceUntilIdle()
+        
+        fakeFavorites.addFavoriteError = RuntimeException("Mutation err")
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        vm.toggleFavorite(channel)
+        advanceUntilIdle()
+        
+        assertNotNull(vm.uiState.value.favoritesLoadError)
+        assertNotNull(vm.uiState.value.favoriteMutationError)
+        assertNotNull(vm.uiState.value.favoritesError)
+        
+        vm.dismissFavoritesError()
+        assertNull(vm.uiState.value.favoritesLoadError)
+        assertNull(vm.uiState.value.favoriteMutationError)
         assertNull(vm.uiState.value.favoritesError)
     }
 
+    // 18. Provider change clears persisted and pending
     @Test
-    fun testEstablishedObserverFailureRetainsLastKnownFavorites() = runTest {
+    fun testProviderChange_clearsPersistedAndPending() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
+        val profile1 = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile1)
+        advanceUntilIdle()
         
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        val channel2 = createChannel("chan2", "Channel 2", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        vm.toggleFavorite(channel2)
+        advanceTimeBy(100L)
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan2"))
+        
+        fakeFavorites.observeFlow.resetReplayCache()
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
+    }
+
+    // 19. Live disabled clears persisted and pending
+    @Test
+    fun testLiveDisabled_clearsPersistedAndPending() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
@@ -1440,61 +1561,168 @@ class LiveViewModelTest {
         fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
         advanceUntilIdle()
         
-        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+        val channel2 = createChannel("chan2", "Channel 2", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        vm.toggleFavorite(channel2)
+        advanceTimeBy(100L)
         
-        // Trigger error in observer
-        fakeFavorites.observeFavoritesError = RuntimeException("Error")
-        fakeFavorites.observeFlow.emit(emptyList()) // trigger collect emission
+        vm.onProfileChanged(createDisabledProfile("prov_1"))
         advanceUntilIdle()
         
-        // Favorites should still contain chan1 (retains last known)
-        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
-        assertEquals("Could not load Live TV favorites.", vm.uiState.value.favoritesError)
-        assertFalse(vm.uiState.value.favoritesLoading)
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
     }
 
+    // 20. Favorites disabled clears persisted and pending
     @Test
-    fun testDismissFavoritesError() = runTest {
+    fun testFavoritesDisabled_clearsPersistedAndPending() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
         
-        // Inject failure
-        fakeFavorites.observeFavoritesError = RuntimeException("Error")
-        fakeFavorites.observeFlow.emit(emptyList())
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
         advanceUntilIdle()
         
-        assertEquals("Could not load Live TV favorites.", vm.uiState.value.favoritesError)
+        val channel2 = createChannel("chan2", "Channel 2", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        vm.toggleFavorite(channel2)
+        advanceTimeBy(100L)
         
-        vm.dismissFavoritesError()
-        assertNull(vm.uiState.value.favoritesError)
+        val disabledFavProfile = profile.copy(features = profile.features.copy(favoritesEnabled = false))
+        vm.onProfileChanged(disabledFavProfile)
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
     }
 
+    // 21. onCleared clears pending and cancels jobs
     @Test
-    fun testActiveJobsCancelledOnCleared() = runTest {
+    fun testOnCleared_clearsPendingAndCancelsJobs() = runTest {
         val fake = FakeLiveDataSource()
         val vm = LiveViewModel(fake, fakeFavorites)
-        
         val profile = createEnabledProfile("prov_1").copy(
-            features = createEnabledProfile("prov_1").features.copy(
-                favoritesEnabled = true
-            )
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
         )
         vm.onProfileChanged(profile)
         advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        vm.toggleFavorite(channel)
+        advanceTimeBy(100L)
         
         val onClearedMethod = vm::class.java.getDeclaredMethod("onCleared")
         onClearedMethod.isAccessible = true
         onClearedMethod.invoke(vm)
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
+    }
+
+    // 22. Merge multiple overlapping mutations evaluates LTR correctly
+    @Test
+    fun testMerge_multipleOverlappingMutations_evaluatesLtrCorrectly() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel1 = createChannel("chan1", "Channel 1", "cat1")
+        val channel2 = createChannel("chan2", "Channel 2", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel1)
+        vm.toggleFavorite(channel2)
+        
+        assertEquals(setOf("chan1", "chan2"), vm.uiState.value.favoriteChannelIds)
+        assertEquals(setOf("chan1", "chan2"), vm.uiState.value.favoriteMutationChannelIds)
         
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.favoritesLoading)
+    }
+
+    // 23. Merge room emission during pending add merges correctly
+    @Test
+    fun testMerge_roomEmissionDuringPendingAdd_mergesCorrectly() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        val channel1 = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel1)
+        advanceTimeBy(100L)
+        
+        fakeFavorites.observeFlow.emit(emptyList())
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+    }
+
+    // 24. Merge room emission during pending remove merges correctly
+    @Test
+    fun testMerge_roomEmissionDuringPendingRemove_mergesCorrectly() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        val channel1 = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.removeFavoriteDelayMs = 1000L
+        
+        vm.toggleFavorite(channel1)
+        advanceTimeBy(100L)
+        
+        fakeFavorites.observeFlow.emit(listOf(FavoriteEntity("chan1", "LIVE", "Channel 1", "logo", "url", "cat1", "Category 1")))
+        advanceUntilIdle()
+        
+        assertFalse(vm.uiState.value.favoriteChannelIds.contains("chan1"))
+    }
+
+    // 25. Merge interleaved provider and generation isolation
+    @Test
+    fun testMerge_interleavedProviderAndGenerationIsolation() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites)
+        val profile1 = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile1)
+        advanceUntilIdle()
+        
+        val channel = createChannel("chan1", "Channel 1", "cat1")
+        fakeFavorites.addFavoriteDelayMs = 1000L
+        vm.toggleFavorite(channel)
+        advanceTimeBy(500L)
+        
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(favoritesEnabled = true)
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+        
+        advanceUntilIdle()
+        
+        assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
+        assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
     }
 }

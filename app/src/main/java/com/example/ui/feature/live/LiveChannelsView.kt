@@ -250,7 +250,7 @@ fun LiveChannelsView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Could not update this favorite.",
+                    text = favoritesError,
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f)

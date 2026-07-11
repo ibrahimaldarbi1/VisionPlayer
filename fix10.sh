@@ -1,0 +1,2 @@
+sed -i 's/fakeLive.observeEmissions = listOf(emptyList()) \/\/ Hidden by provider/fakeLive.snapshotEmissions = listOf(LiveCategoryVisibilitySnapshot(1, emptyList()))/g' app/src/test/java/com/example/LiveViewModelTest.kt
+sed -i 's/fakeLive.observeEmissions = listOf(emptyList()) \/\/ Hidden/fakeLive.snapshotEmissions = listOf(LiveCategoryVisibilitySnapshot(1, emptyList()))/g' app/src/test/java/com/example/LiveViewModelTest.kt

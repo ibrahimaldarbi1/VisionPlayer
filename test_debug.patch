@@ -1,0 +1,13 @@
+--- app/src/test/java/com/example/LiveViewModelTest.kt
++++ app/src/test/java/com/example/LiveViewModelTest.kt
+@@ -4249,6 +4249,7 @@
+         advanceUntilIdle()
+         
+         fakeLive.channelsCallCount = 0
++        println("channelsCallCount before: ${fakeLive.channelsCallCount}")
+         vm.selectCategory("cat_1")
+         advanceUntilIdle()
++        println("channelsCallCount after: ${fakeLive.channelsCallCount}")
+         
+         assertEquals(0, fakeLive.channelsCallCount)
+     }

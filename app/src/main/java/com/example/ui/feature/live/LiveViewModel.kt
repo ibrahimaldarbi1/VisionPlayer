@@ -617,6 +617,16 @@ class LiveViewModel(
         }
     }
 
+    private fun isCategoryVisibleToProvider(
+        categoryId: String,
+        state: LiveUiState = _uiState.value
+    ): Boolean {
+        if (!state.categoryVisibilityReady) {
+            return true
+        }
+        return rawVisibleCategories.any { it.id == categoryId }
+    }
+
     fun selectCategory(categoryId: String?) {
         val normalizedCategoryId = if (categoryId.isNullOrBlank()) null else categoryId
         if (normalizedCategoryId == null) {
@@ -625,6 +635,10 @@ class LiveViewModel(
         }
 
         val state = _uiState.value
+        if (!isCategoryVisibleToProvider(normalizedCategoryId, state)) {
+            return
+        }
+
         val isLocked = normalizedCategoryId in state.lockedLiveCategoryIds
 
         if (!state.parentalControlsEnabled || !isLocked) {
@@ -1057,6 +1071,10 @@ class LiveViewModel(
     fun onChannelSelected(channel: LiveChannel) {
         val state = _uiState.value
         if (!state.featureEnabled || !isLiveVisible) return
+
+        if (state.categoryVisibilityReady && rawVisibleCategories.none { it.id == channel.categoryId }) {
+            return
+        }
 
         if (state.parentalControlsEnabled && state.hideAdultContent && (channel.isAdult || channel.categoryId in state.lockedLiveCategoryIds)) {
             return

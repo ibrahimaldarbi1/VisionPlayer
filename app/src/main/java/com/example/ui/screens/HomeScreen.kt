@@ -460,7 +460,6 @@ fun HomeScreen(
                             pinVerificationLoading = liveState.pinVerificationLoading,
                             pinVerificationError = liveState.pinVerificationError,
                             lockedLiveCategoryIds = liveState.lockedLiveCategoryIds,
-                            parentalSessionUnlocked = liveState.parentalSessionUnlocked,
                             hideAdultContent = liveState.hideAdultContent,
                             onChannelSelected = liveViewModel::onChannelSelected,
                             onSubmitParentalPin = liveViewModel::submitParentalPin,

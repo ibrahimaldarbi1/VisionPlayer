@@ -1,0 +1,1 @@
+sed -i 's/assertNull(vm.uiEvent)/val events = mutableListOf<com.example.data.LiveEvent>(); val job = launch { vm.events.collect { events.add(it) } }; runCurrent(); assertTrue(events.isEmpty()); job.cancel()/g' app/src/test/java/com/example/LiveViewModelTest.kt

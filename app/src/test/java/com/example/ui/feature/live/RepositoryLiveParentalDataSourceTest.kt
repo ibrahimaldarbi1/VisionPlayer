@@ -192,4 +192,153 @@ class RepositoryLiveParentalDataSourceTest {
         val result = dataSource.verifyPin("prov_1", "1234")
         assertFalse(result)
     }
+
+    @Test
+    fun observeStatus_emitsLockedCategoryIds() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cat_1,cat_2"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertEquals(setOf("cat_1", "cat_2"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_exactMarkerEnablesHideMode() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "__HIDDEN__"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertTrue(emitted!!.hideAdultContent)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_markerIsExcludedFromLockedIds() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cat_1,__HIDDEN__"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertTrue(emitted!!.hideAdultContent)
+        assertEquals(setOf("cat_1"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_whitespaceAndDuplicateIdsNormalize() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = " cat_1 , cat_1, cat_2 "))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertEquals(setOf("cat_1", "cat_2"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_markerSubstringDoesNotEnableHiding() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "x__HIDDEN__x"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertFalse(emitted!!.hideAdultContent)
+        assertEquals(setOf("x__HIDDEN__x"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_lowercaseMarkerDoesNotEnableHiding() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "__hidden__"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertFalse(emitted!!.hideAdultContent)
+        assertEquals(setOf("__hidden__"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_categoryIdCasingIsPreserved() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cAt_1,CaT_2"))
+
+        var emitted: LiveParentalStatus? = null
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emitted = it }
+        }
+        advanceUntilIdle()
+        assertEquals(setOf("cAt_1", "CaT_2"), emitted?.lockedCategoryIds)
+        job.cancel()
+    }
+
+    @Test
+    fun observeStatus_equivalentNormalizedStatusEmissionsAreSuppressed() = runTest {
+        val dao = FakeIptvDao()
+        val repository = IptvRepository(dao, RuntimeEnvironment.getApplication())
+        val dataSource = RepositoryLiveParentalDataSource(repository)
+        
+        var emissionCount = 0
+        val job = launch {
+            dataSource.observeStatus("prov_1").collect { emissionCount++ }
+        }
+        
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cat_1,cat_2"))
+        advanceUntilIdle()
+        assertEquals(1, emissionCount)
+        
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cat_2,cat_1"))
+        advanceUntilIdle()
+        assertEquals(1, emissionCount) // Suppressed due to distinctUntilChanged
+        
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = " cat_1 , cat_2 "))
+        advanceUntilIdle()
+        assertEquals(1, emissionCount) // Suppressed
+        
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "9999", lockedCategories = "cat_1,cat_2"))
+        advanceUntilIdle()
+        assertEquals(1, emissionCount) // Suppressed because pinConfigured remains true and categories are the same
+        
+        dao.parentalFlow.emit(ParentalControlEntity(pin = "1234", lockedCategories = "cat_3"))
+        advanceUntilIdle()
+        assertEquals(2, emissionCount)
+        
+        job.cancel()
+    }
 }

@@ -56,7 +56,6 @@ fun LiveChannelsView(
     pinVerificationLoading: Boolean = false,
     pinVerificationError: String? = null,
     lockedLiveCategoryIds: Set<String> = emptySet(),
-    parentalSessionUnlocked: Boolean = false,
     hideAdultContent: Boolean = false,
     onChannelSelected: (LiveChannel) -> Unit = {},
     onSubmitParentalPin: (String) -> Unit = {},
@@ -79,7 +78,7 @@ fun LiveChannelsView(
             title = { Text("Parental Control PIN Required") },
             text = {
                 Column {
-                    val textDesc = "Enter 4-digit parental PIN to proceed."
+                    val textDesc = "This Live TV content is protected by parental controls."
                     Text(textDesc)
                     Spacer(modifier = Modifier.height(12.dp))
                     TextField(
@@ -186,7 +185,7 @@ fun LiveChannelsView(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Hide-adult is active. Mature channels are hidden from the catalog.",
+                        text = "Adult channels and selected locked Live categories are hidden.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
@@ -311,7 +310,11 @@ fun LiveChannelsView(
                     )
                 }
                 items(categories) { cat ->
-                    val showCategoryLock = cat.id in lockedLiveCategoryIds && !parentalSessionUnlocked
+                    val showCategoryLock = LiveParentalPresentationPolicy.categoryShowsLock(
+                        parentalControlsEnabled = parentalControlsEnabled,
+                        categoryId = cat.id,
+                        lockedCategoryIds = lockedLiveCategoryIds
+                    )
                     FilterChip(
                         selected = selectedCategory == cat.id,
                         onClick = { onCategorySelected(cat.id) },
@@ -494,11 +497,11 @@ fun LiveChannelsView(
                         title = channel.name,
                         imageUrl = channel.logoUrl,
                         subtitle = channel.categoryName,
-                        isLocked = if (parentalSessionUnlocked) {
-                            false
-                        } else {
-                            channel.isAdult || channel.isLocked || channel.categoryId in lockedLiveCategoryIds
-                        },
+                        isLocked = LiveParentalPresentationPolicy.channelShowsLock(
+                            parentalControlsEnabled = parentalControlsEnabled,
+                            channel = channel,
+                            lockedCategoryIds = lockedLiveCategoryIds
+                        ),
                         isFavorite = isFav,
                         onFavoriteToggle = if (favoritesEnabled && !favoriteMutationInProgress) {
                             {

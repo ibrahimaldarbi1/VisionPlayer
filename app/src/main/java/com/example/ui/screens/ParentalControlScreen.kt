@@ -67,6 +67,8 @@ fun ParentalControlScreen(
         } else {
             isPinSet = false
             isUnlocked = true // Setting up for first time
+            adultContentModeHidden = false
+            lockedCategories.clear()
         }
     }
 

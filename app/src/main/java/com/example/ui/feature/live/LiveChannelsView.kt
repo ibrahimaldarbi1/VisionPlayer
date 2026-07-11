@@ -57,8 +57,7 @@ fun LiveChannelsView(
     pinVerificationError: String? = null,
     lockedLiveCategoryIds: Set<String> = emptySet(),
     parentalSessionUnlocked: Boolean = false,
-    pendingParentalChannel: LiveChannel? = null,
-    pendingParentalCategoryId: String? = null,
+    hideAdultContent: Boolean = false,
     onChannelSelected: (LiveChannel) -> Unit = {},
     onSubmitParentalPin: (String) -> Unit = {},
     onCancelParentalDialog: () -> Unit = {},
@@ -80,14 +79,7 @@ fun LiveChannelsView(
             title = { Text("Parental Control PIN Required") },
             text = {
                 Column {
-                    val textDesc = when {
-                        pendingParentalChannel != null -> "Enter PIN to play ${pendingParentalChannel.name}."
-                        pendingParentalCategoryId != null -> {
-                            val categoryName = categories.firstOrNull { it.id == pendingParentalCategoryId }?.name ?: ""
-                            "Enter PIN to browse category $categoryName."
-                        }
-                        else -> "Enter PIN to proceed."
-                    }
+                    val textDesc = "Enter 4-digit parental PIN to proceed."
                     Text(textDesc)
                     Spacer(modifier = Modifier.height(12.dp))
                     TextField(
@@ -171,6 +163,36 @@ fun LiveChannelsView(
                 .padding(bottom = 12.dp)
                 .testTag("filter_live_channels")
         )
+
+        if (parentalControlsEnabled && hideAdultContent) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("parental_hide_adult_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Hide Adult Mode Active",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Hide-adult is active. Mature channels are hidden from the catalog.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+        }
 
         if (profile.features.multiViewEnabled && onStartMultiViewSetup != null) {
             Button(

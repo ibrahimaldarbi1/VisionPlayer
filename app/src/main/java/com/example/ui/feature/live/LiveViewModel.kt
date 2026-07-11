@@ -182,6 +182,7 @@ class LiveViewModel(
             cancelPinVerification(invalidate = true, clearLoading = true)
             validPinEnteredForCurrentGeneration = false
             rawChannels = emptyList()
+            rawVisibleCategories = emptyList()
             currentProviderId = null
             persistedFavoriteChannelIds = emptySet()
             _uiState.update { currentState ->
@@ -217,7 +218,10 @@ class LiveViewModel(
                     pinDialogVisible = false,
                     pendingParentalChannel = null,
                     pinVerificationLoading = false,
-                    pinVerificationError = null
+                    pinVerificationError = null,
+                    lockedLiveCategoryIds = emptySet(),
+                    hideAdultContent = false,
+                    pendingParentalCategoryId = null
                 )
             }
             return
@@ -422,7 +426,7 @@ class LiveViewModel(
                             currentState.copy(
                                 categoriesError = "Could not load Live TV categories.",
                                 categoryVisibilityReady = false,
-                                channels = rawChannels
+                                channels = applyLiveChannelPolicy(rawChannels, currentState)
                             )
                         }
                     } else {

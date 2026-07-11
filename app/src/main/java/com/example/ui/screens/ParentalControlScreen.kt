@@ -21,10 +21,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.config.ProviderConfigRegistry
-import com.example.data.IptvMockData
 import com.example.data.IptvRepository
 import com.example.data.ParentalControlEntity
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.feature.live.LiveParentalPolicyParser
+import com.example.ui.feature.live.LiveParentalPolicySerializer
 
 @Composable
 fun ParentalControlScreen(
@@ -45,23 +47,27 @@ fun ParentalControlScreen(
     // Parental Control Parameters
     var adultContentModeHidden by remember { mutableStateOf(false) }
     val lockedCategories = remember { mutableStateListOf<String>() }
-    var categories by remember { mutableStateOf<List<com.example.data.Category>>(emptyList()) }
+
+    val liveCategories by repository
+        .observeAllCategoriesForManagement("LIVE")
+        .collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Load State
     LaunchedEffect(profile.providerId) {
         val settings = repository.getParentalSettingsDirect()
         if (settings != null) {
             isPinSet = true
-            adultContentModeHidden = settings.lockedCategories.contains("__HIDDEN__")
-            if (settings.lockedCategories.isNotEmpty()) {
-                val list = settings.lockedCategories.split(",")
-                lockedCategories.addAll(list.filter { it != "__HIDDEN__" && it.isNotEmpty() })
-            }
+            val status = LiveParentalPolicyParser.parse(
+                storedPin = settings.pin,
+                storedCategoryPolicy = settings.lockedCategories
+            )
+            adultContentModeHidden = status.hideAdultContent
+            lockedCategories.clear()
+            lockedCategories.addAll(status.lockedCategoryIds)
         } else {
             isPinSet = false
             isUnlocked = true // Setting up for first time
         }
-        categories = repository.getCachedCategories(profile.providerId)
     }
 
     Box(
@@ -244,15 +250,21 @@ fun ParentalControlScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text("Fully Hide Adult Categories", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                                    Text("Remove mature channels from all search and catalog rows", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                    Text("Hide adult-tagged channels and selected locked categories from Live TV.", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                                 }
                                 Switch(
                                     checked = adultContentModeHidden,
                                     onCheckedChange = { value ->
                                         adultContentModeHidden = value
-                                        saveLockedCategories(repository, lockedCategories, value)
+                                        coroutineScope.launch {
+                                            saveLockedCategories(
+                                                repository = repository,
+                                                lockedCategories = lockedCategories.toList(),
+                                                hideAdult = value
+                                            )
+                                        }
                                     },
                                     colors = SwitchDefaults.colors(checkedThumbColor = Color(profile.branding.primaryColor))
                                 )
@@ -261,10 +273,13 @@ fun ParentalControlScreen(
                     }
 
                     item {
-                        Text("Block Channel Categories", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Lock Live TV Categories", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
                     }
 
-                    items(categories) { category ->
+                    items(
+                        items = liveCategories,
+                        key = { it.id }
+                    ) { category ->
                         val isLocked = lockedCategories.contains(category.id)
                         Card(
                             colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
@@ -274,7 +289,13 @@ fun ParentalControlScreen(
                                 } else {
                                     lockedCategories.add(category.id)
                                 }
-                                saveLockedCategories(repository, lockedCategories, adultContentModeHidden)
+                                coroutineScope.launch {
+                                    saveLockedCategories(
+                                        repository = repository,
+                                        lockedCategories = lockedCategories.toList(),
+                                        hideAdult = adultContentModeHidden
+                                    )
+                                }
                             }
                         ) {
                             Row(
@@ -286,7 +307,7 @@ fun ParentalControlScreen(
                             ) {
                                 Column {
                                     Text(category.name, style = MaterialTheme.typography.bodyLarge, color = Color.White, fontWeight = FontWeight.Bold)
-                                    Text("Subtype: ${category.type}", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                                    Text("Subtype: LIVE", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
                                 }
                                 Checkbox(
                                     checked = isLocked,
@@ -296,7 +317,13 @@ fun ParentalControlScreen(
                                         } else {
                                             lockedCategories.add(category.id)
                                         }
-                                        saveLockedCategories(repository, lockedCategories, adultContentModeHidden)
+                                        coroutineScope.launch {
+                                            saveLockedCategories(
+                                                repository = repository,
+                                                lockedCategories = lockedCategories.toList(),
+                                                hideAdult = adultContentModeHidden
+                                            )
+                                        }
                                     },
                                     colors = CheckboxDefaults.colors(checkedColor = Color(profile.branding.primaryColor))
                                 )
@@ -329,19 +356,20 @@ fun ParentalControlScreen(
     }
 }
 
-private fun saveLockedCategories(
+private suspend fun saveLockedCategories(
     repository: IptvRepository,
-    lockedCategories: List<String>,
+    lockedCategories: Collection<String>,
     hideAdult: Boolean
 ) {
-    kotlinx.coroutines.GlobalScope.launch {
-        val settings = repository.getParentalSettingsDirect()
-        if (settings != null) {
-            val list = lockedCategories.toMutableList()
-            if (hideAdult) list.add("__HIDDEN__")
-            repository.saveParentalSettings(
-                ParentalControlEntity(pin = settings.pin, lockedCategories = list.joinToString(","))
-            )
-        }
-    }
+    val settings = repository.getParentalSettingsDirect() ?: return
+    val serializedPolicy = LiveParentalPolicySerializer.serialize(
+        lockedCategoryIds = lockedCategories,
+        hideAdultContent = hideAdult
+    )
+    repository.saveParentalSettings(
+        ParentalControlEntity(
+            pin = settings.pin,
+            lockedCategories = serializedPolicy
+        )
+    )
 }

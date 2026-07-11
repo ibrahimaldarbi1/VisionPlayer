@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import com.example.config.ProviderProfile
 import com.example.data.*
 import com.example.ui.feature.common.FocusableItemCard
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,8 +30,6 @@ fun LiveChannelsView(
     categories: List<Category>,
     selectedCategory: String?,
     onCategorySelected: (String?) -> Unit,
-    onPlayLive: (LiveChannel) -> Unit,
-    repository: IptvRepository,
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
     favoritesEnabled: Boolean = false,
@@ -48,26 +45,33 @@ fun LiveChannelsView(
     onRetryChannels: () -> Unit = {},
     categoriesError: String? = null,
     categoriesLoading: Boolean = false,
-    onRetryCategories: () -> Unit = {}
+    onRetryCategories: () -> Unit = {},
+
+    // Parental Control Parameters
+    parentalControlsEnabled: Boolean = false,
+    parentalLoading: Boolean = false,
+    parentalLoadError: String? = null,
+    pinDialogVisible: Boolean = false,
+    pinVerificationLoading: Boolean = false,
+    pinVerificationError: String? = null,
+    onChannelSelected: (LiveChannel) -> Unit = {},
+    onSubmitParentalPin: (String) -> Unit = {},
+    onCancelParentalDialog: () -> Unit = {},
+    onRetryParentalStatus: () -> Unit = {},
+    onDismissParentalLoadError: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val coroutineScope = rememberCoroutineScope()
-    var isAdultUnlocked by remember { mutableStateOf(false) }
-    var pinRequiredChannel by remember { mutableStateOf<LiveChannel?>(null) }
     var pinInput by remember { mutableStateOf("") }
-    var pinError by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        // Check if global parental PIN is already unlocked
-        val settings = repository.getParentalSettingsDirect()
-        if (settings == null) {
-            isAdultUnlocked = true // No PIN configured -> default allowed
+    LaunchedEffect(pinDialogVisible) {
+        if (!pinDialogVisible) {
+            pinInput = ""
         }
     }
 
-    if (pinRequiredChannel != null) {
+    if (parentalControlsEnabled && pinDialogVisible) {
         AlertDialog(
-            onDismissRequest = { pinRequiredChannel = null },
+            onDismissRequest = onCancelParentalDialog,
             title = { Text("Parental Control PIN Required") },
             text = {
                 Column {
@@ -75,46 +79,55 @@ fun LiveChannelsView(
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
                         value = pinInput,
-                        onValueChange = { pinInput = it },
+                        onValueChange = { value ->
+                            pinInput = value.filter { it.isDigit() }.take(4)
+                        },
                         label = { Text("Enter 4-Digit PIN") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color(profile.branding.primaryColor),
                             focusedLabelColor = Color(profile.branding.primaryColor)
-                        )
+                        ),
+                        modifier = Modifier.testTag("parental_pin_input_field")
                     )
-                    if (pinError) {
-                        Text("Incorrect PIN. Please try again.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (pinVerificationError != null) {
+                        Text(
+                            text = pinVerificationError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.testTag("parental_pin_error_text")
+                        )
                     }
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            val settings = repository.getParentalSettingsDirect()
-                            if (settings != null && settings.pin == pinInput) {
-                                isAdultUnlocked = true
-                                val chan = pinRequiredChannel
-                                pinRequiredChannel = null
-                                pinError = false
-                                if (chan != null) onPlayLive(chan)
-                            } else {
-                                pinError = true
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor))
+                    onClick = { onSubmitParentalPin(pinInput) },
+                    enabled = !pinVerificationLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
+                    modifier = Modifier.testTag("confirm_parental_pin_button")
                 ) {
-                    Text("Unlock Channel")
+                    if (pinVerificationLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Unlock Channel")
+                    }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pinRequiredChannel = null }) {
+                TextButton(
+                    onClick = onCancelParentalDialog,
+                    modifier = Modifier.testTag("cancel_parental_pin_button")
+                ) {
                     Text("Cancel")
                 }
-            }
+            },
+            modifier = Modifier.testTag("parental_pin_dialog")
         )
     }
 
@@ -156,6 +169,39 @@ fun LiveChannelsView(
                 Icon(Icons.Default.GridView, contentDescription = "Multi-view")
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Launch Live Multi-view Grid (Up to 4 Streams)")
+            }
+        }
+
+        // Parental Control Status Load Error Banner
+        if (parentalLoadError != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .testTag("parental_error_banner"),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = parentalLoadError,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Row {
+                    TextButton(
+                        onClick = onRetryParentalStatus,
+                        modifier = Modifier.testTag("retry_parental_button")
+                    ) {
+                        Text("Retry")
+                    }
+                    TextButton(
+                        onClick = onDismissParentalLoadError,
+                        modifier = Modifier.testTag("dismiss_parental_button")
+                    ) {
+                        Text("Dismiss")
+                    }
+                }
             }
         }
 
@@ -376,7 +422,7 @@ fun LiveChannelsView(
                         title = channel.name,
                         imageUrl = channel.logoUrl,
                         subtitle = channel.categoryName,
-                        isLocked = channel.isAdult,
+                        isLocked = if (parentalControlsEnabled) (channel.isAdult || channel.isLocked) else false,
                         isFavorite = isFav,
                         onFavoriteToggle = if (favoritesEnabled && !favoriteMutationInProgress) {
                             {
@@ -384,11 +430,7 @@ fun LiveChannelsView(
                             }
                         } else null,
                         onClick = {
-                            if (channel.isAdult && !isAdultUnlocked) {
-                                pinRequiredChannel = channel
-                            } else {
-                                onPlayLive(channel)
-                            }
+                            onChannelSelected(channel)
                         }
                     )
                 }

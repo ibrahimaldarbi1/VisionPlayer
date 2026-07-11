@@ -24,7 +24,18 @@ data class LiveUiState(
     val favoriteMutationChannelIds: Set<String> = emptySet(),
     val favoritesLoading: Boolean = false,
     val favoritesLoadError: String? = null,
-    val favoriteMutationError: String? = null
+    val favoriteMutationError: String? = null,
+
+    val parentalControlsEnabled: Boolean = false,
+    val parentalReady: Boolean = false,
+    val parentalPinConfigured: Boolean = false,
+    val parentalLoading: Boolean = false,
+    val parentalLoadError: String? = null,
+    val parentalSessionUnlocked: Boolean = false,
+    val pinDialogVisible: Boolean = false,
+    val pendingParentalChannel: LiveChannel? = null,
+    val pinVerificationLoading: Boolean = false,
+    val pinVerificationError: String? = null
 ) {
     val favoritesError: String?
         get() = favoriteMutationError ?: favoritesLoadError

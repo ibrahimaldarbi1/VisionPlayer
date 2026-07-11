@@ -60,6 +60,8 @@ import com.example.ui.feature.football.RepositoryFootballDataSource
 import com.example.ui.feature.live.LiveViewModel
 import com.example.ui.feature.live.RepositoryLiveDataSource
 import com.example.ui.feature.live.RepositoryLiveFavoritesDataSource
+import com.example.ui.feature.live.RepositoryLiveParentalDataSource
+import com.example.ui.feature.live.LiveEvent
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.first
@@ -120,15 +122,38 @@ fun HomeScreen(
         com.example.core.viewmodel.AppViewModelFactory {
             LiveViewModel(
                 dataSource = RepositoryLiveDataSource(repository),
-                favoritesDataSource = RepositoryLiveFavoritesDataSource(repository)
+                favoritesDataSource = RepositoryLiveFavoritesDataSource(repository),
+                parentalDataSource = RepositoryLiveParentalDataSource(repository)
             )
         }
     }
     val liveViewModel: LiveViewModel = viewModel(factory = liveViewModelFactory)
     val liveState by liveViewModel.uiState.collectAsStateWithLifecycle()
 
+    val latestOnPlayLive by rememberUpdatedState(onPlayLive)
+
+    LaunchedEffect(liveViewModel) {
+        liveViewModel.events.collect { event ->
+            when (event) {
+                is LiveEvent.PlayChannel -> {
+                    latestOnPlayLive(event.channel)
+                }
+            }
+        }
+    }
+
     LaunchedEffect(profile) {
         liveViewModel.onProfileChanged(profile)
+    }
+
+    LaunchedEffect(activeTab) {
+        liveViewModel.onLiveVisibilityChanged(activeTab == "LIVE")
+    }
+
+    DisposableEffect(liveViewModel) {
+        onDispose {
+            liveViewModel.onLiveVisibilityChanged(false)
+        }
     }
 
     // Football ViewModel & States
@@ -407,8 +432,6 @@ fun HomeScreen(
                             categories = liveState.categories,
                             selectedCategory = liveState.selectedCategoryId,
                             onCategorySelected = liveViewModel::selectCategory,
-                            onPlayLive = onPlayLive,
-                            repository = repository,
                             isTv = isTv,
                             profile = profile,
                             favoritesEnabled = liveState.favoritesEnabled,
@@ -427,7 +450,20 @@ fun HomeScreen(
                             onRetryChannels = liveViewModel::retryChannels,
                             categoriesError = liveState.categoriesError,
                             categoriesLoading = liveState.categoriesLoading,
-                            onRetryCategories = liveViewModel::retryCategories
+                            onRetryCategories = liveViewModel::retryCategories,
+
+                            // Parental Controls Properties
+                            parentalControlsEnabled = liveState.parentalControlsEnabled,
+                            parentalLoading = liveState.parentalLoading,
+                            parentalLoadError = liveState.parentalLoadError,
+                            pinDialogVisible = liveState.pinDialogVisible,
+                            pinVerificationLoading = liveState.pinVerificationLoading,
+                            pinVerificationError = liveState.pinVerificationError,
+                            onChannelSelected = liveViewModel::onChannelSelected,
+                            onSubmitParentalPin = liveViewModel::submitParentalPin,
+                            onCancelParentalDialog = liveViewModel::cancelParentalDialog,
+                            onRetryParentalStatus = liveViewModel::retryParentalStatus,
+                            onDismissParentalLoadError = liveViewModel::dismissParentalLoadError
                         )
                     }
                     "MOVIES" -> if (profile.features.moviesEnabled) {

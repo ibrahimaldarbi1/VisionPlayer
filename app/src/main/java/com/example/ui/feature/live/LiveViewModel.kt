@@ -13,10 +13,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.receiveAsFlow
 
 class LiveViewModel(
     private val dataSource: LiveDataSource,
-    private val favoritesDataSource: LiveFavoritesDataSource
+    private val favoritesDataSource: LiveFavoritesDataSource,
+    private val parentalDataSource: LiveParentalDataSource = DummyParentalDataSource
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LiveUiState())
@@ -33,6 +35,17 @@ class LiveViewModel(
     private var categoriesGeneration: Long = 0L
     private var channelsGeneration: Long = 0L
     private var favoritesGeneration: Long = 0L
+
+    private var parentalObserverJob: Job? = null
+    private var pinVerificationJob: Job? = null
+    private var parentalGeneration: Long = 0L
+    private var pinVerificationGeneration: Long = 0L
+    private var validPinEnteredForCurrentGeneration = false
+
+    private val eventChannel = kotlinx.coroutines.channels.Channel<LiveEvent>(
+        capacity = kotlinx.coroutines.channels.Channel.BUFFERED
+    )
+    val events = eventChannel.receiveAsFlow()
 
     private var persistedFavoriteChannelIds: Set<String> = emptySet()
 
@@ -102,6 +115,7 @@ class LiveViewModel(
 
     fun onProfileChanged(profile: ProviderProfile) {
         val favoritesEnabled = profile.features.favoritesEnabled
+        val parentalEnabled = profile.features.parentalControlEnabled
 
         if (!profile.features.liveTvEnabled) {
             cancelVisibleCategoriesObserver()
@@ -109,6 +123,9 @@ class LiveViewModel(
             cancelChannelsLoad(clearLoading = true)
             cancelFavoritesObserver(clearLoading = true)
             cancelFavoriteMutations(clearState = true)
+            cancelParentalObserver()
+            cancelPinVerification()
+            parentalGeneration++
             rawChannels = emptyList()
             currentProviderId = null
             persistedFavoriteChannelIds = emptySet()
@@ -134,7 +151,18 @@ class LiveViewModel(
                     favoriteMutationChannelIds = emptySet(),
                     favoritesLoading = false,
                     favoritesLoadError = null,
-                    favoriteMutationError = null
+                    favoriteMutationError = null,
+
+                    parentalControlsEnabled = false,
+                    parentalReady = false,
+                    parentalPinConfigured = false,
+                    parentalLoading = false,
+                    parentalLoadError = null,
+                    parentalSessionUnlocked = false,
+                    pinDialogVisible = false,
+                    pendingParentalChannel = null,
+                    pinVerificationLoading = false,
+                    pinVerificationError = null
                 )
             }
             return
@@ -153,6 +181,11 @@ class LiveViewModel(
             cancelFavoritesObserver(clearLoading = true)
             cancelFavoriteMutations(clearState = true)
             persistedFavoriteChannelIds = emptySet()
+
+            // Clear parental controls on provider change / wake up
+            cancelParentalObserver()
+            cancelPinVerification()
+            parentalGeneration++
 
             // Clear old provider channels and categories
             rawChannels = emptyList()
@@ -178,7 +211,18 @@ class LiveViewModel(
                     favoriteChannelIds = emptySet(),
                     favoriteMutationChannelIds = emptySet(),
                     favoritesLoadError = null,
-                    favoriteMutationError = null
+                    favoriteMutationError = null,
+
+                    parentalControlsEnabled = parentalEnabled,
+                    parentalReady = false,
+                    parentalPinConfigured = false,
+                    parentalLoading = false,
+                    parentalLoadError = null,
+                    parentalSessionUnlocked = false,
+                    pinDialogVisible = false,
+                    pendingParentalChannel = null,
+                    pinVerificationLoading = false,
+                    pinVerificationError = null
                 )
             }
 
@@ -195,6 +239,10 @@ class LiveViewModel(
 
             if (favoritesEnabled) {
                 observeLiveFavorites(profile.providerId)
+            }
+
+            if (parentalEnabled) {
+                observeParentalStatus(profile.providerId)
             }
         } else {
             val wasFavoritesEnabled = _uiState.value.favoritesEnabled
@@ -218,6 +266,46 @@ class LiveViewModel(
                             favoriteMutationChannelIds = emptySet(),
                             favoritesLoadError = null,
                             favoriteMutationError = null
+                        )
+                    }
+                }
+            }
+
+            val wasParentalEnabled = _uiState.value.parentalControlsEnabled
+            if (parentalEnabled != wasParentalEnabled) {
+                if (parentalEnabled) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            parentalControlsEnabled = true,
+                            parentalReady = false,
+                            parentalPinConfigured = false,
+                            parentalLoading = false,
+                            parentalLoadError = null,
+                            parentalSessionUnlocked = false,
+                            pinDialogVisible = false,
+                            pendingParentalChannel = null,
+                            pinVerificationLoading = false,
+                            pinVerificationError = null
+                        )
+                    }
+                    currentProviderId?.let { providerId ->
+                        observeParentalStatus(providerId)
+                    }
+                } else {
+                    cancelParentalObserver()
+                    cancelPinVerification()
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            parentalControlsEnabled = false,
+                            parentalReady = false,
+                            parentalPinConfigured = false,
+                            parentalLoading = false,
+                            parentalLoadError = null,
+                            parentalSessionUnlocked = false,
+                            pinDialogVisible = false,
+                            pendingParentalChannel = null,
+                            pinVerificationLoading = false,
+                            pinVerificationError = null
                         )
                     }
                 }
@@ -663,6 +751,276 @@ class LiveViewModel(
         }
     }
 
+    private fun cancelParentalObserver() {
+        parentalObserverJob?.cancel()
+        parentalObserverJob = null
+    }
+
+    private fun cancelPinVerification() {
+        pinVerificationJob?.cancel()
+        pinVerificationJob = null
+    }
+
+    private fun observeParentalStatus(providerId: String) {
+        cancelParentalObserver()
+        parentalGeneration++
+        val requestGeneration = parentalGeneration
+        validPinEnteredForCurrentGeneration = false
+
+        _uiState.update { currentState ->
+            currentState.copy(
+                parentalLoading = true,
+                parentalLoadError = null
+            )
+        }
+
+        parentalObserverJob = viewModelScope.launch {
+            try {
+                parentalDataSource.observeStatus(providerId).collect { status ->
+                    if (parentalGeneration != requestGeneration || currentProviderId != providerId) return@collect
+
+                    val pinConfigured = status.pinConfigured
+                    _uiState.update { currentState ->
+                        val isUnlocked = if (!pinConfigured) {
+                            true
+                        } else {
+                            validPinEnteredForCurrentGeneration
+                        }
+
+                        val dialogVisible = if (!pinConfigured) {
+                            false
+                        } else {
+                            currentState.pinDialogVisible
+                        }
+
+                        currentState.copy(
+                            parentalReady = true,
+                            parentalPinConfigured = pinConfigured,
+                            parentalLoading = false,
+                            parentalLoadError = null,
+                            parentalSessionUnlocked = isUnlocked,
+                            pinDialogVisible = dialogVisible
+                        )
+                    }
+
+                    if (!pinConfigured) {
+                        _uiState.value.pendingParentalChannel?.let { pending ->
+                            eventChannel.send(LiveEvent.PlayChannel(pending))
+                            _uiState.update { it.copy(pendingParentalChannel = null) }
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                if (parentalGeneration == requestGeneration && currentProviderId == providerId) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            parentalLoading = false,
+                            parentalLoadError = "Could not load parental-control settings."
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun requiresParentalUnlock(channel: LiveChannel): Boolean {
+        return channel.isAdult || channel.isLocked
+    }
+
+    fun onChannelSelected(channel: LiveChannel) {
+        val state = _uiState.value
+        if (!state.featureEnabled) return
+
+        if (!requiresParentalUnlock(channel)) {
+            viewModelScope.launch {
+                eventChannel.send(LiveEvent.PlayChannel(channel))
+            }
+            return
+        }
+
+        if (!state.parentalControlsEnabled) {
+            viewModelScope.launch {
+                eventChannel.send(LiveEvent.PlayChannel(channel))
+            }
+            return
+        }
+
+        if (state.parentalSessionUnlocked) {
+            viewModelScope.launch {
+                eventChannel.send(LiveEvent.PlayChannel(channel))
+            }
+            return
+        }
+
+        if (state.pinVerificationLoading) return
+
+        if (!state.parentalReady) {
+            _uiState.update { it.copy(pendingParentalChannel = channel) }
+            return
+        }
+
+        if (state.parentalPinConfigured) {
+            _uiState.update { currentState ->
+                currentState.copy(
+                    pendingParentalChannel = channel,
+                    pinDialogVisible = true,
+                    pinVerificationError = null
+                )
+            }
+        } else {
+            viewModelScope.launch {
+                eventChannel.send(LiveEvent.PlayChannel(channel))
+            }
+        }
+    }
+
+    fun submitParentalPin(candidatePin: String) {
+        if (candidatePin.length != 4 || !candidatePin.all { it.isDigit() }) {
+            _uiState.update { it.copy(pinVerificationError = "Enter a 4-digit PIN.") }
+            return
+        }
+
+        val state = _uiState.value
+        val providerId = currentProviderId
+        if (!state.parentalControlsEnabled ||
+            providerId == null ||
+            !state.pinDialogVisible ||
+            state.pendingParentalChannel == null ||
+            !state.parentalReady ||
+            !state.parentalPinConfigured ||
+            state.pinVerificationLoading
+        ) {
+            return
+        }
+
+        cancelPinVerification()
+        pinVerificationGeneration++
+        val requestPinGen = pinVerificationGeneration
+        val requestParentalGen = parentalGeneration
+        val requestProviderId = providerId
+
+        lateinit var verificationJob: Job
+        verificationJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val isValid = parentalDataSource.verifyPin(requestProviderId, candidatePin)
+
+                if (parentalGeneration != requestParentalGen ||
+                    currentProviderId != requestProviderId ||
+                    pinVerificationGeneration != requestPinGen
+                ) {
+                    return@launch
+                }
+
+                if (isValid) {
+                    validPinEnteredForCurrentGeneration = true
+                    val channel = _uiState.value.pendingParentalChannel
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            parentalSessionUnlocked = true,
+                            pinDialogVisible = false,
+                            pendingParentalChannel = null,
+                            pinVerificationLoading = false,
+                            pinVerificationError = null
+                        )
+                    }
+                    if (channel != null) {
+                        eventChannel.send(LiveEvent.PlayChannel(channel))
+                    }
+                } else {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            pinVerificationLoading = false,
+                            pinVerificationError = "Incorrect PIN. Please try again."
+                        )
+                    }
+                }
+            } catch (e: CancellationException) {
+                if (parentalGeneration == requestParentalGen &&
+                    currentProviderId == requestProviderId &&
+                    pinVerificationGeneration == requestPinGen
+                ) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            pinVerificationLoading = false
+                        )
+                    }
+                }
+                throw e
+            } catch (t: Throwable) {
+                if (parentalGeneration == requestParentalGen &&
+                    currentProviderId == requestProviderId &&
+                    pinVerificationGeneration == requestPinGen
+                ) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            pinVerificationLoading = false,
+                            pinVerificationError = "Could not verify the PIN."
+                        )
+                    }
+                }
+            }
+        }
+
+        pinVerificationJob = verificationJob
+        _uiState.update { currentState ->
+            currentState.copy(
+                pinVerificationLoading = true,
+                pinVerificationError = null
+            )
+        }
+        verificationJob.start()
+    }
+
+    fun cancelParentalDialog() {
+        cancelPinVerification()
+        pinVerificationGeneration++
+        _uiState.update { currentState ->
+            currentState.copy(
+                pinDialogVisible = false,
+                pendingParentalChannel = null,
+                pinVerificationLoading = false,
+                pinVerificationError = null
+            )
+        }
+    }
+
+    fun retryParentalStatus() {
+        val providerId = currentProviderId ?: return
+        _uiState.update { currentState ->
+            currentState.copy(
+                parentalLoadError = null
+            )
+        }
+        observeParentalStatus(providerId)
+    }
+
+    fun dismissParentalLoadError() {
+        _uiState.update { currentState ->
+            currentState.copy(
+                parentalLoadError = null
+            )
+        }
+    }
+
+    fun onLiveVisibilityChanged(visible: Boolean) {
+        if (!visible) {
+            cancelPinVerification()
+            pinVerificationGeneration++
+            validPinEnteredForCurrentGeneration = false
+            _uiState.update { currentState ->
+                currentState.copy(
+                    pinDialogVisible = false,
+                    pendingParentalChannel = null,
+                    pinVerificationLoading = false,
+                    pinVerificationError = null,
+                    parentalSessionUnlocked = if (currentState.parentalPinConfigured) false else currentState.parentalSessionUnlocked
+                )
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         cancelVisibleCategoriesObserver()
@@ -670,6 +1028,8 @@ class LiveViewModel(
         cancelChannelsLoad(clearLoading = true)
         cancelFavoritesObserver(clearLoading = true)
         cancelFavoriteMutations(clearState = true)
+        cancelParentalObserver()
+        cancelPinVerification()
         _uiState.update { it.copy(categoryVisibilityReady = false) }
     }
 }

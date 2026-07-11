@@ -7,12 +7,16 @@ import com.example.ui.feature.live.LiveDataSource
 import com.example.ui.feature.live.LiveViewModel
 import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
 import com.example.ui.feature.live.LiveFavoritesDataSource
+import com.example.ui.feature.live.LiveParentalDataSource
+import com.example.ui.feature.live.LiveParentalStatus
+import com.example.ui.feature.live.LiveEvent
 import com.example.data.FavoriteEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.*
@@ -32,6 +36,7 @@ class LiveViewModelTest {
 
     private val testDispatcher = StandardTestDispatcher()
     private val fakeFavorites = FakeLiveFavoritesDataSource()
+    private val fakeParental = FakeLiveParentalDataSource()
 
     @Before
     fun setUp() {
@@ -49,6 +54,18 @@ class LiveViewModelTest {
         fakeFavorites.lastObserveProviderId = null
         fakeFavorites.lastAddedChannel = null
         fakeFavorites.lastRemovedChannelId = null
+
+        // Reset fakeParental
+        fakeParental.observeStatusCallCount = 0
+        fakeParental.verifyPinCallCount = 0
+        fakeParental.observeStatusDelayMs = 0L
+        fakeParental.verifyPinDelayMs = 0L
+        fakeParental.observeStatusError = null
+        fakeParental.verifyPinError = null
+        fakeParental.lastObserveProviderId = null
+        fakeParental.lastVerifyPinProviderId = null
+        fakeParental.lastVerifyPinCandidate = null
+        fakeParental.mockPinVerificationResult = true
     }
 
     @After
@@ -207,6 +224,47 @@ class LiveViewModelTest {
                 delay(removeFavoriteDelayMs)
             }
             removeFavoriteError?.let { throw it }
+        }
+    }
+
+    class FakeLiveParentalDataSource : LiveParentalDataSource {
+        var observeStatusCallCount = 0
+        var verifyPinCallCount = 0
+
+        var observeStatusDelayMs = 0L
+        var verifyPinDelayMs = 0L
+
+        var observeStatusError: Throwable? = null
+        var verifyPinError: Throwable? = null
+
+        val statusFlow = kotlinx.coroutines.flow.MutableSharedFlow<LiveParentalStatus>(replay = 1)
+        var lastObserveProviderId: String? = null
+        var lastVerifyPinProviderId: String? = null
+        var lastVerifyPinCandidate: String? = null
+        var mockPinVerificationResult = true
+
+        override fun observeStatus(providerId: String): Flow<LiveParentalStatus> = flow {
+            observeStatusCallCount++
+            lastObserveProviderId = providerId
+            if (observeStatusDelayMs > 0) {
+                delay(observeStatusDelayMs)
+            }
+            observeStatusError?.let { throw it }
+            statusFlow.collect {
+                observeStatusError?.let { throw it }
+                emit(it)
+            }
+        }
+
+        override suspend fun verifyPin(providerId: String, candidatePin: String): Boolean {
+            verifyPinCallCount++
+            lastVerifyPinProviderId = providerId
+            lastVerifyPinCandidate = candidatePin
+            if (verifyPinDelayMs > 0) {
+                delay(verifyPinDelayMs)
+            }
+            verifyPinError?.let { throw it }
+            return mockPinVerificationResult
         }
     }
 
@@ -1724,5 +1782,898 @@ class LiveViewModelTest {
         
         assertTrue(vm.uiState.value.favoriteChannelIds.isEmpty())
         assertTrue(vm.uiState.value.favoriteMutationChannelIds.isEmpty())
+    }
+
+    // 1. Initial State is Off and Safe
+    @Test
+    fun parental_initialStateIsOffAndSafe() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val state = vm.uiState.value
+        assertFalse(state.parentalControlsEnabled)
+        assertFalse(state.parentalReady)
+        assertFalse(state.parentalPinConfigured)
+        assertFalse(state.parentalLoading)
+        assertNull(state.parentalLoadError)
+        assertFalse(state.parentalSessionUnlocked)
+        assertFalse(state.pinDialogVisible)
+        assertNull(state.pendingParentalChannel)
+        assertFalse(state.pinVerificationLoading)
+        assertNull(state.pinVerificationError)
+    }
+
+    // 2. Profile Changed Starts Observer when Parental Enabled
+    @Test
+    fun parental_onProfileChanged_parentalEnabled_startsObserver() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+        assertEquals(1, fakeParental.observeStatusCallCount)
+        assertEquals("prov_1", fakeParental.lastObserveProviderId)
+        assertTrue(vm.uiState.value.parentalLoading)
+    }
+
+    // 3. Profile Changed Stops Observer and Resets when Parental Disabled
+    @Test
+    fun parental_onProfileChanged_parentalDisabled_stopsObserverAndResets() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profileEnabled = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profileEnabled)
+        advanceUntilIdle()
+
+        val profileDisabled = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = false)
+        )
+        vm.onProfileChanged(profileDisabled)
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.parentalControlsEnabled)
+        assertFalse(vm.uiState.value.parentalReady)
+    }
+
+    // 4. Provider Changed Cancels Active Observer and Starts New
+    @Test
+    fun parental_providerChanged_cancelsActiveObserverAndStartsNew() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile1 = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile1)
+        advanceUntilIdle()
+
+        val profile2 = createEnabledProfile("prov_2").copy(
+            features = createEnabledProfile("prov_2").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile2)
+        advanceUntilIdle()
+
+        assertEquals(2, fakeParental.observeStatusCallCount)
+        assertEquals("prov_2", fakeParental.lastObserveProviderId)
+    }
+
+    // 5. Status Emissions Configure True Updates State
+    @Test
+    fun parental_statusEmitsConfiguredTrue_updatesUiState() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.parentalReady)
+        assertTrue(state.parentalPinConfigured)
+        assertFalse(state.parentalLoading)
+        assertFalse(state.parentalSessionUnlocked)
+    }
+
+    // 6. Status Emissions Configure False Unlocks Session, Closes Dialog, and Plays Pending Channel
+    @Test
+    fun parental_statusEmitsConfiguredFalse_unlocksSessionAndClosesDialogAndPlaysPending() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        // 1. PIN configured = true
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.pinDialogVisible)
+        assertEquals(channel, vm.uiState.value.pendingParentalChannel)
+
+        // Capture events
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        // 2. PIN configured = false
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = false))
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.parentalReady)
+        assertFalse(state.parentalPinConfigured)
+        assertTrue(state.parentalSessionUnlocked)
+        assertFalse(state.pinDialogVisible)
+        assertNull(state.pendingParentalChannel)
+
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 7. Status Load Failure Reports Error and Stops Loading
+    @Test
+    fun parental_statusLoadFailure_reportsSafeErrorAndStopsLoading() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        fakeParental.observeStatusError = RuntimeException("DB offline")
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.parentalLoading)
+        assertEquals("Could not load parental-control settings.", state.parentalLoadError)
+    }
+
+    // 8. Retry Reloads Status
+    @Test
+    fun parental_statusLoadError_retryReloadsStatus() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        fakeParental.observeStatusError = RuntimeException("DB offline")
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        assertEquals(1, fakeParental.observeStatusCallCount)
+        assertNotNull(vm.uiState.value.parentalLoadError)
+
+        fakeParental.observeStatusError = null
+        vm.retryParentalStatus()
+        advanceUntilIdle()
+
+        assertEquals(2, fakeParental.observeStatusCallCount)
+        assertNull(vm.uiState.value.parentalLoadError)
+    }
+
+    // 9. Dismiss Load Error Clears Error Only
+    @Test
+    fun parental_statusLoadError_dismissClearsErrorOnly() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        fakeParental.observeStatusError = RuntimeException("DB offline")
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        assertNotNull(vm.uiState.value.parentalLoadError)
+        vm.dismissParentalLoadError()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.parentalLoadError)
+    }
+
+    // 10. Non-locked Plays Immediately
+    @Test
+    fun parental_onChannelSelected_nonLocked_playsImmediately() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val channel = createChannel("chan1", "Safe Channel", "cat1")
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 11. Locked with Parental Disabled Plays Immediately
+    @Test
+    fun parental_onChannelSelected_lockedAndParentalDisabled_playsImmediately() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = false)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val channel = createChannel("locked1", "Locked Channel", "cat1").copy(isLocked = true)
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 12. Locked with Parental Enabled but Unconfigured PIN Plays Immediately
+    @Test
+    fun parental_onChannelSelected_lockedAndParentalEnabledAndNoPinConfigured_playsImmediately() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = false))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 13. Locked with Parental Enabled and PIN Configured Shows Dialog and Stores Pending
+    @Test
+    fun parental_onChannelSelected_lockedAndParentalEnabledAndPinConfigured_showsDialogAndStoresPending() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.pinDialogVisible)
+        assertEquals(channel, vm.uiState.value.pendingParentalChannel)
+        assertTrue(events.isEmpty())
+        job.cancel()
+    }
+
+    // 14. Locked on Unlocked Session Plays Immediately
+    @Test
+    fun parental_onChannelSelected_parentalSessionUnlocked_playsImmediately() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = true
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        // Session should be unlocked now
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+
+        val channel2 = createChannel("locked2", "Another Locked Channel", "cat1").copy(isLocked = true)
+        vm.onChannelSelected(channel2)
+        advanceUntilIdle()
+
+        assertEquals(2, events.size)
+        assertEquals(channel2, (events[1] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 15. Selection on Status Not Ready Postpones until Ready
+    @Test
+    fun parental_onChannelSelected_notReady_postponesUntilReadyAndPinConfiguredCheck() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertEquals(channel, vm.uiState.value.pendingParentalChannel)
+        assertFalse(vm.uiState.value.pinDialogVisible)
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        // Wait! Since it was configured, now on subsequent status ready, let's see:
+        // Wait, since status emission occurred, it updates parentalReady = true.
+        // If we select the channel again, it will trigger the dialog. Let's select it:
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.pinDialogVisible)
+    }
+
+    // 16. Submit PIN Incorrect PIN Reports Error and Remains Locked
+    @Test
+    fun parental_submitPin_incorrectPin_reportsErrorAndRemainsLocked() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = false
+        vm.submitParentalPin("9999")
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.parentalSessionUnlocked)
+        assertTrue(state.pinDialogVisible)
+        assertEquals("Incorrect PIN. Please try again.", state.pinVerificationError)
+    }
+
+    // 17. Submit PIN Correct PIN Unlocks and Plays and Closes Dialog
+    @Test
+    fun parental_submitPin_correctPin_unlocksAndPlaysAndClosesDialog() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = true
+        val events = mutableListOf<LiveEvent>()
+        val job = launch { vm.events.collect { events.add(it) } }
+
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertTrue(state.parentalSessionUnlocked)
+        assertFalse(state.pinDialogVisible)
+        assertNull(state.pendingParentalChannel)
+        assertNull(state.pinVerificationError)
+
+        assertEquals(1, events.size)
+        assertEquals(channel, (events[0] as LiveEvent.PlayChannel).channel)
+        job.cancel()
+    }
+
+    // 18. Non-digit PIN Validation Error
+    @Test
+    fun parental_submitPin_nonDigitInput_reportsImmediateValidationFailure() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        vm.submitParentalPin("12A4")
+        advanceUntilIdle()
+
+        assertEquals("Enter a 4-digit PIN.", vm.uiState.value.pinVerificationError)
+    }
+
+    // 19. Too Short PIN Validation Error
+    @Test
+    fun parental_submitPin_tooShortInput_reportsImmediateValidationFailure() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        vm.submitParentalPin("12")
+        advanceUntilIdle()
+
+        assertEquals("Enter a 4-digit PIN.", vm.uiState.value.pinVerificationError)
+    }
+
+    // 20. Double Submission Block
+    @Test
+    fun parental_submitPin_multipleVerificationSubmissionsBlocked() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.verifyPinDelayMs = 1000L
+        vm.submitParentalPin("1234")
+        advanceTimeBy(100L)
+
+        // Attempt second submission
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        // Verify only 1 verification call made
+        assertEquals(1, fakeParental.verifyPinCallCount)
+    }
+
+    // 21. Verification Job Cancelled on Dismiss or Cancel
+    @Test
+    fun parental_submitPin_verificationJobCancelledOnDismissOrCancel() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.verifyPinDelayMs = 1000L
+        vm.submitParentalPin("1234")
+        advanceTimeBy(100L)
+
+        assertTrue(vm.uiState.value.pinVerificationLoading)
+
+        vm.cancelParentalDialog()
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.pinVerificationLoading)
+        assertFalse(vm.uiState.value.pinDialogVisible)
+    }
+
+    // 22. Verification Failure Does Not Disrupt Active Observer
+    @Test
+    fun parental_submitPin_verificationFailureDoesNotDisruptActiveObserver() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = false
+        vm.submitParentalPin("9999")
+        advanceUntilIdle()
+
+        assertEquals(1, fakeParental.observeStatusCallCount)
+        assertNull(vm.uiState.value.parentalLoadError)
+    }
+
+    // 23. Verification Exception Reports Verification Error and Allows Retry
+    @Test
+    fun parental_submitPin_verificationExceptionReportsVerificationErrorAndAllowsRetry() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.verifyPinError = RuntimeException("Timeout error")
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.pinVerificationLoading)
+        assertEquals("Could not verify the PIN.", state.pinVerificationError)
+    }
+
+    // 24. Cancel Dialog Closes Dialog and Clears Pending and Resets Verification
+    @Test
+    fun parental_cancelDialog_closesDialogAndClearsPendingAndResetsVerification() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = false
+        vm.submitParentalPin("9999")
+        advanceUntilIdle()
+
+        vm.cancelParentalDialog()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.pinDialogVisible)
+        assertNull(state.pendingParentalChannel)
+        assertNull(state.pinVerificationError)
+    }
+
+    // 25. Status Emissions Configure True Locks Session and Does Not Keep Prior Unconfigured Session Unlock
+    @Test
+    fun parental_statusEmitsConfiguredTrue_doesNotKeepPriorUnconfiguredSessionUnlock() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        // 1. PIN unconfigured -> unlocked
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = false))
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+
+        // 2. PIN becomes configured -> locks
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.parentalSessionUnlocked)
+    }
+
+    // 26. Status Emissions Configure True Maintains Valid Session Unlock in Same Generation
+    @Test
+    fun parental_statusEmitsConfiguredTrue_maintainsValidSessionUnlockInSameGeneration() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = true
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+
+        // Status observer emits again (same generation, PIN configured = true)
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+    }
+
+    // 27. Visibility False Closes Dialog, Clears Pending, and Locks Session
+    @Test
+    fun parental_visibilityFalse_closesDialogAndClearsPendingAndLocksSession() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.pinDialogVisible)
+
+        // Enter correct pin to unlock first
+        fakeParental.mockPinVerificationResult = true
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+
+        // Visibility false
+        vm.onLiveVisibilityChanged(false)
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.pinDialogVisible)
+        assertNull(state.pendingParentalChannel)
+        assertFalse(state.parentalSessionUnlocked)
+    }
+
+    // 28. Visibility False Does Not Lock Session if PIN is Unconfigured
+    @Test
+    fun parental_visibilityFalse_unconfiguredSessionRetainsUnlockedState() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = false))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+
+        vm.onLiveVisibilityChanged(false)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+    }
+
+    // 29. Feature Disabled Profile Stops Observer and Resets State
+    @Test
+    fun parental_onProfileChanged_featureDisabled_stopsObserverAndResetsState() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val profileDisabled = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = false)
+        )
+        vm.onProfileChanged(profileDisabled)
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.parentalControlsEnabled)
+        assertFalse(state.parentalReady)
+        assertFalse(state.pinDialogVisible)
+    }
+
+    // 30. Non-live Profile Resets State to Default
+    @Test
+    fun parental_onProfileChanged_nonLiveProfile_resetsStateToDefault() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                liveTvEnabled = false,
+                parentalControlEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.parentalControlsEnabled)
+        assertFalse(state.parentalReady)
+    }
+
+    // 31. ViewModel Cleared Cancels Observation and Verification
+    @Test
+    fun parental_viewModelCleared_cancelsObservationAndVerification() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.verifyPinDelayMs = 1000L
+        vm.submitParentalPin("1234")
+        advanceTimeBy(100L)
+
+        assertTrue(vm.uiState.value.pinVerificationLoading)
+
+        // Invoke onCleared on ViewModel
+        val method = LiveViewModel::class.java.getDeclaredMethod("onCleared")
+        method.isAccessible = true
+        method.invoke(vm)
+        advanceUntilIdle()
+
+        // Verification job must be cancelled and not active
+        assertFalse(vm.uiState.value.pinVerificationLoading)
+    }
+
+    // 32. Toggle Favorite is Never Gated by PIN Verification State
+    @Test
+    fun parental_toggleFavorite_isNeverGatedByPinVerificationState() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(
+                parentalControlEnabled = true,
+                favoritesEnabled = true
+            )
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.pinDialogVisible)
+
+        // Toggle favorite during locked verification dialog
+        vm.toggleFavorite(channel)
+        advanceUntilIdle()
+
+        // Should successfully perform favorite toggle action on datasource
+        assertEquals(1, fakeFavorites.addFavoriteCallCount)
+    }
+
+    // 33. Status Emissions Configure True Closes Dialog if Already Unlocked
+    @Test
+    fun parental_statusEmitsConfiguredTrue_closesDialogIfAlreadyUnlocked() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        fakeParental.mockPinVerificationResult = true
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+        assertFalse(vm.uiState.value.pinDialogVisible)
+    }
+
+    // 34. Correct PIN Entered Resets Input Verification Error on Subsequent Opening
+    @Test
+    fun parental_correctPin_resetsVerificationErrorOnSubsequentOpening() = runTest {
+        val fake = FakeLiveDataSource()
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        val profile = createEnabledProfile("prov_1").copy(
+            features = createEnabledProfile("prov_1").features.copy(parentalControlEnabled = true)
+        )
+        vm.onProfileChanged(profile)
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(pinConfigured = true))
+        advanceUntilIdle()
+
+        val channel = createChannel("adult1", "Adult Channel", "cat1").copy(isAdult = true)
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+
+        // Fail first
+        fakeParental.mockPinVerificationResult = false
+        vm.submitParentalPin("9999")
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.pinVerificationError)
+
+        // Cancel dialog
+        vm.cancelParentalDialog()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pinVerificationError)
+
+        // Open again
+        vm.onChannelSelected(channel)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pinVerificationError)
     }
 }

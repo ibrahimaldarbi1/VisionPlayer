@@ -287,12 +287,19 @@ class EpgViewModelTest {
 
     @Test
     fun testSelectingAnotherChannelStartsObserver() = runTest {
+        val firstKey = EpgRequestKey(providerId = "provider1", lookupKeys = listOf("epg1", "ch1"))
+        fakeDataSource.flows[firstKey] = MutableSharedFlow()
+        
         viewModel.onProfileChanged(createProfile())
-        viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1"), createChannel("ch2", "epg2")))
+        viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1", "epg1"), createChannel("ch2", "epg2")))
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
+        
         viewModel.selectChannel("ch2")
         runCurrent()
+        
+        assertEquals(1, fakeDataSource.cancellationCounts[firstKey])
+        
         val key2 = EpgRequestKey("provider1", listOf("epg2", "ch2"))
         assertTrue(fakeDataSource.observationRequests.contains(key2))
     }
@@ -400,12 +407,21 @@ class EpgViewModelTest {
         viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1")))
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
+        
+        assertEquals(1, fakeDataSource.activeCollectorCounts[key])
+        
         sf.emit(listOf(EpgProgramEntity("ch1", "T", "D", 0L, 1L, "epg1")))
         runCurrent()
         fakeDataSource.flows.remove(key)
         fakeDataSource.delaysMs[key] = 1000L
         viewModel.retryPrograms()
         runCurrent()
+        
+        assertEquals(1, fakeDataSource.cancellationCounts[key])
+        assertEquals(1, fakeDataSource.activeCollectorCounts[key])
+        assertNull(viewModel.uiState.value.programsError)
+        assertEquals(2, fakeDataSource.observationRequests.count { it == key })
+        
         assertTrue(viewModel.uiState.value.programsRefreshing)
     }
 
@@ -496,6 +512,11 @@ class EpgViewModelTest {
         runCurrent()
         viewModel.onProfileChanged(createProfile("prov2"))
         runCurrent()
+        
+        assertEquals(1, fakeDataSource.cancellationCounts[key1])
+        assertNull(viewModel.uiState.value.selectedChannelId)
+        assertNull(viewModel.uiState.value.programsError)
+        
         sf.emit(listOf(EpgProgramEntity("ch1", "T", "D", 0L, 1L, "epg1")))
         runCurrent()
         assertTrue(viewModel.uiState.value.programs.isEmpty())
@@ -619,15 +640,25 @@ class EpgViewModelTest {
 
     @Test
     fun testFeatureDisableClearsEpgState() = runTest {
-        val key = EpgRequestKey("provider1", listOf("epg1", "ch1"))
-        fakeDataSource.synchronousResults[key] = listOf(EpgProgramEntity("ch1", "T", "D", 0L, 1L, "epg1"))
+        val requestKey = EpgRequestKey("provider1", listOf("epg1", "ch1"))
+        fakeDataSource.flows[requestKey] = MutableSharedFlow()
         viewModel.onProfileChanged(createProfile())
         viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1")))
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
+        
         viewModel.onProfileChanged(createProfile(epgEnabled = false))
+        runCurrent()
+        
+        assertEquals(1, fakeDataSource.cancellationCounts[requestKey])
+        
+        assertFalse(viewModel.uiState.value.featureEnabled)
+        assertTrue(viewModel.uiState.value.channels.isEmpty())
         assertNull(viewModel.uiState.value.selectedChannelId)
         assertTrue(viewModel.uiState.value.programs.isEmpty())
+        assertFalse(viewModel.uiState.value.programsLoading)
+        assertFalse(viewModel.uiState.value.programsRefreshing)
+        assertNull(viewModel.uiState.value.programsError)
     }
 
     @Test
@@ -799,6 +830,8 @@ class EpgViewModelTest {
         
         job = f1.get(viewModel) as Job?
         assertNull(job)
+        assertEquals(1, fakeDataSource.cancellationCounts[key])
+        assertNull(viewModel.uiState.value.programsError)
     }
 
     @Test
@@ -870,10 +903,69 @@ class EpgViewModelTest {
     }
 
     @Test
-    fun testUiStateHasNoCredentials() {
-        val state = viewModel.uiState.value
-        assertEquals("", "")
-        // State has no credential fields
+    fun epg_ui_state_exposes_no_credentials_or_infrastructure() {
+        val fields =
+            com.example.ui.feature.epg
+                .EpgUiState::class.java
+                .declaredFields
+
+        val fieldNames =
+            fields.map {
+                it.name.lowercase()
+            }
+
+        val fieldTypeNames =
+            fields.map {
+                it.type.name
+                    .lowercase()
+            }
+
+        val forbiddenNames =
+            listOf(
+                "username",
+                "password",
+                "token",
+                "serverurl",
+                "server_url",
+                "xmltv",
+                "credential",
+                "repository",
+                "datasource",
+                "data_source",
+                "dao"
+            )
+
+        val forbiddenTypes =
+            listOf(
+                "iptvrepository",
+                "epgdatasource",
+                "iptvdao",
+                "sessionentity"
+            )
+
+        assertTrue(
+            fieldNames.none {
+                fieldName ->
+                forbiddenNames.any {
+                    forbidden ->
+                    fieldName.contains(
+                        forbidden
+                    )
+                }
+            }
+        )
+
+        assertTrue(
+            fieldTypeNames.none {
+                fieldType ->
+                forbiddenTypes.any {
+                    forbidden ->
+                    fieldType.contains(
+                        forbidden
+                    )
+                }
+            }
+        )
     }
 
     @Test

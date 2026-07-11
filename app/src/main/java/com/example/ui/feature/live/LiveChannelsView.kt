@@ -205,6 +205,28 @@ fun LiveChannelsView(
             }
         }
 
+        if (parentalLoading && parentalControlsEnabled) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+                    .testTag("parental_loading_banner"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color(profile.branding.primaryColor)
+                )
+                Text(
+                    text = "Checking parental controls…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         if (categoriesError != null) {
             Row(
                 modifier = Modifier

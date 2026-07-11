@@ -14,12 +14,4 @@ interface LiveParentalDataSource {
     ): Boolean
 }
 
-object DummyParentalDataSource : LiveParentalDataSource {
-    override fun observeStatus(providerId: String): Flow<LiveParentalStatus> {
-        return kotlinx.coroutines.flow.flowOf(LiveParentalStatus(pinConfigured = false))
-    }
 
-    override suspend fun verifyPin(providerId: String, candidatePin: String): Boolean {
-        return false
-    }
-}

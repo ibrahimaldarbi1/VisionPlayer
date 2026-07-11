@@ -5,11 +5,11 @@ import com.example.data.Category
 import com.example.data.LiveChannel
 import com.example.ui.feature.live.LiveDataSource
 import com.example.ui.feature.live.LiveViewModel
+import com.example.ui.feature.live.LiveEvent
 import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
 import com.example.ui.feature.live.LiveFavoritesDataSource
 import com.example.ui.feature.live.LiveParentalDataSource
 import com.example.ui.feature.live.LiveParentalStatus
-import com.example.ui.feature.live.LiveEvent
 import com.example.data.FavoriteEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -4492,53 +4492,115 @@ class LiveViewModelTest {
     // 17. Add Live/EPG session continuity test
     @Test
     fun testLiveEpgSessionContinuity() = runTest {
-        val channel = LiveChannel("id1", "CH1", "http", "epg1", "cat1", "Adult Cat", "", 1, true, false)
-        val category = Category("cat1", "Adult Cat", "LIVE")
+        val firstProtectedChannel = LiveChannel(
+            id = "protected_1",
+            name = "Protected One",
+            streamUrl = "http",
+            epgId = "epg1",
+            categoryId = "locked_category",
+            categoryName = "Adult Cat",
+            logoUrl = "",
+            channelNumber = 1,
+            isLocked = false,
+            isAdult = true
+        )
+        val secondProtectedChannel = LiveChannel(
+            id = "protected_2",
+            name = "Protected Two",
+            streamUrl = "http",
+            epgId = "epg2",
+            categoryId = "locked_category",
+            categoryName = "Adult Cat",
+            logoUrl = "",
+            channelNumber = 2,
+            isLocked = true,
+            isAdult = false
+        )
+        val category = Category("locked_category", "Adult Cat", "LIVE")
         
         val fakeLive = FakeLiveDataSource()
-        fakeLive.categoriesEmissions = listOf(listOf(category)); fakeLive.channelsEmissions = listOf(listOf(channel))
+        fakeLive.categoriesEmissions = listOf(listOf(category))
+        fakeLive.channelsEmissions = listOf(listOf(firstProtectedChannel, secondProtectedChannel))
         
         val vm = LiveViewModel(fakeLive, fakeFavorites, fakeParental)
-        fakeParental.statusFlow.tryEmit(LiveParentalStatus(pinConfigured = true, hideAdultContent = false, lockedCategoryIds = emptySet())); fakeParental.mockPinVerificationResult = true
+        fakeParental.statusFlow.tryEmit(LiveParentalStatus(pinConfigured = true, hideAdultContent = false, lockedCategoryIds = emptySet()))
+        fakeParental.mockPinVerificationResult = true
         
         val profile = createParentalProfile("prov_1", liveTvEnabled = true, parentalEnabled = true)
         vm.onProfileChanged(profile)
-        vm.onLiveVisibilityChanged(true) // 1. Make Live visible
+        
+        val events = mutableListOf<LiveEvent>()
+        val collectorJob = backgroundScope.launch {
+            vm.events.collect { events += it }
+        }
+        
         runCurrent()
         
-        vm.onChannelSelected(channel)
-        runCurrent()
-        assertTrue(vm.uiState.value.pinDialogVisible)
+        // 1. Configured parental status becomes ready
+        org.junit.Assert.assertFalse(vm.uiState.value.pinDialogVisible)
         
-        vm.submitParentalPin("1234") // 2. Unlock
-        runCurrent()
-        assertFalse(vm.uiState.value.pinDialogVisible)
-        assertTrue(vm.uiState.value.parentalSessionUnlocked)
-        
-        // 3. Navigate from Live to EPG (Live Content remains visible)
         vm.onLiveVisibilityChanged(true)
         runCurrent()
-        assertTrue(vm.uiState.value.parentalSessionUnlocked)
         
-        // 4. Select another protected channel
-        vm.onChannelSelected(channel)
+        // 2. Selecting firstProtectedChannel opens the PIN dialog
+        vm.onChannelSelected(firstProtectedChannel)
+        runCurrent()
+        org.junit.Assert.assertTrue(vm.uiState.value.pinDialogVisible)
+        
+        // 3. Valid PIN unlocks the session
+        vm.submitParentalPin("1234")
+        runCurrent()
+        org.junit.Assert.assertFalse(vm.uiState.value.pinDialogVisible)
+        org.junit.Assert.assertTrue(vm.uiState.value.parentalSessionUnlocked)
+        
+        // 4. Exactly one playback event is emitted for firstProtectedChannel
+        org.junit.Assert.assertEquals(1, events.size)
+        val event1 = events.first() as LiveEvent.PlayChannel
+        org.junit.Assert.assertEquals("protected_1", event1.channel.id)
+        
+        // 5. Report Live-content visibility as still true to represent Live -> EPG
+        vm.onLiveVisibilityChanged(true)
         runCurrent()
         
-        // 5. Verify no second PIN dialog
-        assertFalse(vm.uiState.value.pinDialogVisible)
+        // 6. Session remains unlocked
+        org.junit.Assert.assertTrue(vm.uiState.value.parentalSessionUnlocked)
         
-        // 6. Report visibility false (leaving both)
+        // 7. Select secondProtectedChannel
+        vm.onChannelSelected(secondProtectedChannel)
+        runCurrent()
+        
+        // 8. No second PIN dialog appears
+        org.junit.Assert.assertFalse(vm.uiState.value.pinDialogVisible)
+        
+        // 9. Exactly one additional playback event is emitted (Total 2)
+        org.junit.Assert.assertEquals(2, events.size)
+        
+        // 10. The second event contains secondProtectedChannel
+        val event2 = events.last() as LiveEvent.PlayChannel
+        org.junit.Assert.assertEquals("protected_2", event2.channel.id)
+        
+        // 12. Report visibility false to represent leaving both
         vm.onLiveVisibilityChanged(false)
         runCurrent()
-        assertFalse(vm.uiState.value.parentalSessionUnlocked)
         
-        // 7. Return to a Live-content surface
+        // 13. Session relocks
+        org.junit.Assert.assertFalse(vm.uiState.value.parentalSessionUnlocked)
+        
+        // 14. Return to a Live-content surface
         vm.onLiveVisibilityChanged(true)
         runCurrent()
         
-        // 8. Verify protected channel requires PIN again
-        vm.onChannelSelected(channel)
+        // 15. Select either protected channel
+        vm.onChannelSelected(secondProtectedChannel)
         runCurrent()
-        assertTrue(vm.uiState.value.pinDialogVisible)
+        
+        // 16. The PIN dialog opens again
+        org.junit.Assert.assertTrue(vm.uiState.value.pinDialogVisible)
+        
+        // 17. No third playback event is emitted before verification
+        org.junit.Assert.assertEquals(2, events.size)
+        
+        collectorJob.cancel()
     }
+
 }

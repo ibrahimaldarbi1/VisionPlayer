@@ -11,6 +11,11 @@ import com.example.ui.feature.epg.EpgViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -41,6 +46,45 @@ class EpgViewModelTest {
     private lateinit var testScope: TestScope
     private lateinit var fakeDataSource: FakeEpgDataSource
     private lateinit var viewModel: EpgViewModel
+
+    
+    private class AdversarialEpgFlow : Flow<List<EpgProgramEntity>> {
+        private var storedCollector: FlowCollector<List<EpgProgramEntity>>? = null
+        val collectorStarted = CompletableDeferred<Unit>()
+        val cancellationObserved = CompletableDeferred<Unit>()
+        val releaseCancelledCollector = CompletableDeferred<Unit>()
+        var cancellationCount: Int = 0
+            private set
+        var externalEmissionAttempts: Int = 0
+            private set
+
+        override suspend fun collect(collector: FlowCollector<List<EpgProgramEntity>>) {
+            storedCollector = collector
+            if (!collectorStarted.isCompleted) {
+                collectorStarted.complete(Unit)
+            }
+            try {
+                awaitCancellation()
+            } catch (cancellation: CancellationException) {
+                cancellationCount += 1
+                if (!cancellationObserved.isCompleted) {
+                    cancellationObserved.complete(Unit)
+                }
+                withContext(NonCancellable) {
+                    releaseCancelledCollector.await()
+                }
+                throw cancellation
+            } finally {
+                storedCollector = null
+            }
+        }
+
+        suspend fun emitFromExternalTestScope(programs: List<EpgProgramEntity>) {
+            externalEmissionAttempts += 1
+            val collector = checkNotNull(storedCollector)
+            collector.emit(programs)
+        }
+    }
 
     private data class EpgRequestKey(
         val providerId: String,
@@ -104,15 +148,18 @@ class EpgViewModelTest {
         val delaysMs = mutableMapOf<EpgRequestKey, Long>()
         val cancellationCounts = mutableMapOf<EpgRequestKey, Int>()
         val activeCollectorCounts = mutableMapOf<EpgRequestKey, Int>()
-        val ignoreCancellationRequests = mutableSetOf<EpgRequestKey>()
-        val releaseStaleResultGates = mutableMapOf<EpgRequestKey, kotlinx.coroutines.CompletableDeferred<Unit>>()
+        val adversarialFlows = mutableMapOf<EpgRequestKey, AdversarialEpgFlow>()
 
         override fun observePrograms(providerId: String, channelLookupIds: List<String>): Flow<List<EpgProgramEntity>> {
             val key = EpgRequestKey(providerId, channelLookupIds)
             observationRequests.add(key)
-            activeCollectorCounts[key] = (activeCollectorCounts[key] ?: 0) + 1
+            
+            adversarialFlows[key]?.let {
+                return it
+            }
 
             return flow {
+                activeCollectorCounts[key] = (activeCollectorCounts[key] ?: 0) + 1
                 try {
                     if (delaysMs.containsKey(key)) {
                         delay(delaysMs[key]!!)
@@ -129,16 +176,6 @@ class EpgViewModelTest {
                     }
                 } catch (e: CancellationException) {
                     cancellationCounts[key] = (cancellationCounts[key] ?: 0) + 1
-                    if (ignoreCancellationRequests.contains(key)) {
-                        // Deterministic cancellation ignoring mode
-                        val gate = releaseStaleResultGates[key]
-                        if (gate != null) {
-                            gate.await()
-                            if (synchronousResults.containsKey(key)) {
-                                emit(synchronousResults[key]!!)
-                            }
-                        }
-                    }
                     throw e
                 } finally {
                     activeCollectorCounts[key] = (activeCollectorCounts[key] ?: 1) - 1
@@ -613,47 +650,54 @@ class EpgViewModelTest {
         val keyA = EpgRequestKey("providerA", listOf("epgA", "chA"))
         val keyB = EpgRequestKey("providerB", listOf("epgB", "chB"))
         
-        fakeDataSource.ignoreCancellationRequests.add(keyA)
-        fakeDataSource.releaseStaleResultGates[keyA] = kotlinx.coroutines.CompletableDeferred()
-        val oldProg = EpgProgramEntity("chA", "Old", "D", 0L, 1L, "epgA")
-        fakeDataSource.synchronousResults[keyA] = listOf(oldProg)
+        val advFlowA = AdversarialEpgFlow()
+        fakeDataSource.adversarialFlows[keyA] = advFlowA
+        val oldPrograms = listOf(EpgProgramEntity("chA", "Old", "D", 0L, 1L, "epgA"))
         
         val sfB = MutableSharedFlow<List<EpgProgramEntity>>()
         fakeDataSource.flows[keyB] = sfB
         
-        // 1-4. Start A
         viewModel.onProfileChanged(createProfile("providerA"))
         viewModel.onChannelsChanged("providerA", listOf(createChannel("chA", "epgA")))
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
         
-        // 5-6. Change to B and start B
+        org.junit.Assert.assertTrue(advFlowA.collectorStarted.isCompleted)
+        
         viewModel.onProfileChanged(createProfile("providerB"))
         viewModel.onChannelsChanged("providerB", listOf(createChannel("chB", "epgB")))
         runCurrent()
+        
+        org.junit.Assert.assertTrue(advFlowA.cancellationObserved.isCompleted)
         
         val progB = EpgProgramEntity("chB", "New", "D", 0L, 1L, "epgB")
         sfB.emit(listOf(progB))
         runCurrent()
         
-        // 7. Release stale A
-        fakeDataSource.releaseStaleResultGates[keyA]?.complete(Unit)
+        org.junit.Assert.assertEquals(listOf(progB), viewModel.uiState.value.programs)
+        
+        advFlowA.emitFromExternalTestScope(oldPrograms)
         runCurrent()
         
-        // 8. Verify
-        assertEquals("chB", viewModel.uiState.value.selectedChannelId)
-        assertEquals(listOf(progB), viewModel.uiState.value.programs)
-        assertNull(viewModel.uiState.value.programsError)
+        org.junit.Assert.assertEquals(1, advFlowA.externalEmissionAttempts)
+        org.junit.Assert.assertEquals("chB", viewModel.uiState.value.selectedChannelId)
+        org.junit.Assert.assertEquals(listOf(progB), viewModel.uiState.value.programs)
+        org.junit.Assert.assertNull(viewModel.uiState.value.programsError)
+        
+        advFlowA.releaseCancelledCollector.complete(Unit)
+        runCurrent()
+        
+        org.junit.Assert.assertEquals(1, advFlowA.cancellationCount)
     }
 
-    // Replace the empty old-job identity test with old_observer_completion_cannot_clear_newer_observer_job
     @Test
     fun old_observer_completion_cannot_clear_newer_observer_job() = runTest {
         val keyA = EpgRequestKey("provider1", listOf("epgA", "chA"))
         val keyB = EpgRequestKey("provider1", listOf("epgB", "chB"))
         
-        val sfA = MutableSharedFlow<List<EpgProgramEntity>>()
-        fakeDataSource.flows[keyA] = sfA
+        val advFlowA = AdversarialEpgFlow()
+        fakeDataSource.adversarialFlows[keyA] = advFlowA
+        
         val sfB = MutableSharedFlow<List<EpgProgramEntity>>()
         fakeDataSource.flows[keyB] = sfB
         
@@ -662,21 +706,34 @@ class EpgViewModelTest {
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
         
-        // Change to B
+        val f1 = viewModel.javaClass.getDeclaredField("programObserverJob")
+        f1.isAccessible = true
+        val jobA = f1.get(viewModel) as Job?
+        
         viewModel.selectChannel("chB")
         runCurrent()
         
-        // Emulate old A completing later (e.g. timeout or cancelled finally running late)
-        // Since it's cancelled, we just verify the job is still for B.
-        val f1 = viewModel.javaClass.getDeclaredField("programObserverJob")
-        f1.isAccessible = true
-        val job = f1.get(viewModel) as Job?
+        org.junit.Assert.assertTrue(advFlowA.cancellationObserved.isCompleted)
+        org.junit.Assert.assertFalse(advFlowA.releaseCancelledCollector.isCompleted)
         
-        assertTrue(job?.isActive == true)
+        val jobB = f1.get(viewModel) as Job?
+        org.junit.Assert.assertTrue(jobB?.isActive == true)
+        org.junit.Assert.assertTrue(jobB !== jobA)
+        
+        viewModel.onGuideVisibilityChanged(true)
+        runCurrent()
+        
+        org.junit.Assert.assertEquals(1, fakeDataSource.activeCollectorCounts[keyB])
+        
+        advFlowA.releaseCancelledCollector.complete(Unit)
+        runCurrent()
+        
+        val jobB2 = f1.get(viewModel) as Job?
+        org.junit.Assert.assertTrue(jobB2 === jobB)
         
         sfB.emit(listOf(EpgProgramEntity("chB", "B", "D", 0L, 1L, "epgB")))
         runCurrent()
-        assertTrue(viewModel.uiState.value.programs.isNotEmpty())
+        org.junit.Assert.assertTrue(viewModel.uiState.value.programs.isNotEmpty())
     }
 
     // Splitting Job Reference Clearing
@@ -747,12 +804,12 @@ class EpgViewModelTest {
     @Test
     fun old_observer_cannot_clear_newer_job_reference() = runTest {
         val key1 = EpgRequestKey("provider1", listOf("epg1", "ch1"))
-        val key2 = EpgRequestKey("provider1", listOf("epg2", "ch2"))
-        fakeDataSource.flows[key1] = MutableSharedFlow()
-        fakeDataSource.flows[key2] = MutableSharedFlow()
+        
+        val advFlowA = AdversarialEpgFlow()
+        fakeDataSource.adversarialFlows[key1] = advFlowA
         
         viewModel.onProfileChanged(createProfile())
-        viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1", "epg1"), createChannel("ch2", "epg2")))
+        viewModel.onChannelsChanged("provider1", listOf(createChannel("ch1", "epg1")))
         viewModel.onGuideVisibilityChanged(true)
         runCurrent()
         
@@ -760,14 +817,19 @@ class EpgViewModelTest {
         f1.isAccessible = true
         val job1 = f1.get(viewModel) as Job?
         
-        viewModel.selectChannel("ch2")
+        viewModel.retryPrograms()
         runCurrent()
         
-        val job2 = f1.get(viewModel) as Job?
-        assertTrue(job2 != null && job1 !== job2)
+        org.junit.Assert.assertTrue(advFlowA.cancellationObserved.isCompleted)
         
-        // job1 cancellation in `finally` must not null out job2
-        // Since we can't easily execute its finally late without hacking the fake, the fact that job2 is there is sufficient.
+        val job2 = f1.get(viewModel) as Job?
+        org.junit.Assert.assertTrue(job2 != null && job1 !== job2)
+        
+        advFlowA.releaseCancelledCollector.complete(Unit)
+        runCurrent()
+        
+        val job3 = f1.get(viewModel) as Job?
+        org.junit.Assert.assertTrue(job3 === job2)
     }
 
     @Test

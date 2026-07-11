@@ -1,0 +1,3 @@
+sed -i 's/import androidx.compose.material3.Text/import androidx.compose.material3.Text\nimport androidx.compose.material3.TextButton/' app/src/main/java/com/example/ui/feature/live/LiveParentalPinDialog.kt
+sed -i 's/            dismissButton = {/            dismissButton = {\n                TextButton(\n                    onClick = onCancel,\n                    modifier = Modifier.testTag("cancel_parental_pin_button")\n                ) {\n                    Text("Cancel")\n                }\n            },\n            modifier = Modifier.testTag("parental_pin_dialog")/' app/src/main/java/com/example/ui/feature/live/LiveParentalPinDialog.kt
+sed -i '/Button(onClick = onCancel) {/,/}/d' app/src/main/java/com/example/ui/feature/live/LiveParentalPinDialog.kt

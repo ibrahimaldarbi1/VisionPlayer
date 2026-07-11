@@ -147,7 +147,7 @@ fun HomeScreen(
     }
 
     LaunchedEffect(activeTab) {
-        liveViewModel.onLiveVisibilityChanged(activeTab == "LIVE")
+        liveViewModel.onLiveVisibilityChanged(com.example.ui.feature.live.LiveContentSurfaceVisibilityPolicy.isVisible(activeTab))
     }
 
     DisposableEffect(liveViewModel) {
@@ -165,6 +165,38 @@ fun HomeScreen(
         }
     )
     val footballState by footballViewModel.uiState.collectAsStateWithLifecycle()
+
+    // EPG ViewModel & States
+    val epgViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.epg.EpgViewModel(
+                dataSource = com.example.ui.feature.epg.RepositoryEpgDataSource(repository)
+            )
+        }
+    }
+    val epgViewModel: com.example.ui.feature.epg.EpgViewModel = viewModel(factory = epgViewModelFactory)
+    val epgState by epgViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(profile) {
+        epgViewModel.onProfileChanged(profile)
+    }
+
+    LaunchedEffect(profile.providerId, liveState.channels) {
+        epgViewModel.onChannelsChanged(
+            providerId = profile.providerId,
+            channels = liveState.channels
+        )
+    }
+
+    LaunchedEffect(activeTab) {
+        epgViewModel.onGuideVisibilityChanged(activeTab == "EPG")
+    }
+
+    DisposableEffect(epgViewModel) {
+        onDispose {
+            epgViewModel.onGuideVisibilityChanged(false)
+        }
+    }
 
     // 1. Profile initialization/change
     LaunchedEffect(profile) {
@@ -498,9 +530,22 @@ fun HomeScreen(
                     }
                     "EPG" -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
                         TvGuideView(
-                            channels = liveState.channels,
-                            repository = repository,
-                            onPlayLive = onPlayLive,
+                            uiState = epgState,
+                            onSelectChannel = epgViewModel::selectChannel,
+                            onRequestPlay = liveViewModel::onChannelSelected,
+                            onRetryPrograms = epgViewModel::retryPrograms,
+                            onDismissProgramsError = epgViewModel::dismissProgramsError,
+                            parentalControlsEnabled = liveState.parentalControlsEnabled,
+                            parentalLoading = liveState.parentalLoading,
+                            parentalLoadError = liveState.parentalLoadError,
+                            pinDialogVisible = liveState.pinDialogVisible,
+                            pinVerificationLoading = liveState.pinVerificationLoading,
+                            pinVerificationError = liveState.pinVerificationError,
+                            lockedLiveCategoryIds = liveState.lockedLiveCategoryIds,
+                            onSubmitParentalPin = liveViewModel::submitParentalPin,
+                            onCancelParentalDialog = liveViewModel::cancelParentalDialog,
+                            onRetryParentalStatus = liveViewModel::retryParentalStatus,
+                            onDismissParentalLoadError = liveViewModel::dismissParentalLoadError,
                             isTv = isTv,
                             profile = profile
                         )

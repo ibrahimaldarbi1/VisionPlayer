@@ -1,8 +1,9 @@
 package com.example.ui.feature.live
 
-internal object LiveContentSurfaceVisibilityPolicy {
+import com.example.ui.feature.shell.AppDestination
 
-    fun isVisible(activeTab: String): Boolean {
-        return activeTab == "LIVE" || activeTab == "EPG"
+internal object LiveContentSurfaceVisibilityPolicy {
+    fun isVisible(activeDestination: AppDestination): Boolean {
+        return activeDestination == AppDestination.LIVE || activeDestination == AppDestination.EPG
     }
 }

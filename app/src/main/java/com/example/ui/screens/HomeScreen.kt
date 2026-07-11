@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.app.UiModeManager
-import android.content.Context
-import android.content.res.Configuration
 import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -26,6 +23,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import com.example.ui.feature.shell.AppDestination
+import com.example.ui.feature.shell.AppNavigationState
+import com.example.ui.feature.shell.AppShell
+import com.example.ui.feature.shell.FeatureAvailabilityPolicy
+import com.example.ui.feature.shell.rememberAppNavigationState
+import com.example.ui.feature.common.DeviceType
+import com.example.ui.feature.common.rememberDeviceType
+
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,14 +88,12 @@ fun HomeScreen(
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
-    val isTv = remember {
-        val uiModeManager = context.getSystemService(Context.UI_MODE_SERVICE) as? UiModeManager
-        uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
-    }
+    val deviceType = rememberDeviceType()
+    val isTv = deviceType == DeviceType.TV
 
     // Dynamic state triggered by active provider profile configurations
     val profile = ProviderConfigRegistry.currentProfile
-    var activeTab by remember { mutableStateOf("HOME") }
+    val navigationState = rememberAppNavigationState()
     val coroutineScope = rememberCoroutineScope()
 
     // Home recommendations ViewModel state
@@ -146,8 +149,8 @@ fun HomeScreen(
         liveViewModel.onProfileChanged(profile)
     }
 
-    LaunchedEffect(activeTab) {
-        liveViewModel.onLiveVisibilityChanged(com.example.ui.feature.live.LiveContentSurfaceVisibilityPolicy.isVisible(activeTab))
+    LaunchedEffect(navigationState.activeDestination) {
+        liveViewModel.onLiveVisibilityChanged(com.example.ui.feature.live.LiveContentSurfaceVisibilityPolicy.isVisible(navigationState.activeDestination))
     }
 
     DisposableEffect(liveViewModel) {
@@ -188,8 +191,8 @@ fun HomeScreen(
     }
 
 
-    LaunchedEffect(activeTab) {
-        epgViewModel.onGuideVisibilityChanged(activeTab == "EPG")
+    LaunchedEffect(navigationState.activeDestination) {
+        epgViewModel.onGuideVisibilityChanged(navigationState.activeDestination == AppDestination.EPG)
     }
 
     DisposableEffect(epgViewModel) {
@@ -204,9 +207,9 @@ fun HomeScreen(
     }
 
     // 2. Home visibility & disposal
-    LaunchedEffect(activeTab, profile.providerId) {
+    LaunchedEffect(navigationState.activeDestination, profile.providerId) {
         footballViewModel.onHomeVisibilityChanged(
-            visible = activeTab == "HOME",
+            visible = navigationState.activeDestination == AppDestination.HOME,
             providerId = profile.providerId
         )
     }
@@ -293,7 +296,7 @@ fun HomeScreen(
     }
 
     // Live search executor
-    LaunchedEffect(searchQuery, activeTab, liveState.categories, categoriesMovie, categoriesSeries) {
+    LaunchedEffect(searchQuery, navigationState.activeDestination, liveState.categories, categoriesMovie, categoriesSeries) {
         if (searchQuery.isNotEmpty()) {
             repository.searchContent(
                 searchQuery,
@@ -337,44 +340,21 @@ fun HomeScreen(
                 showMultiViewSetup = false
             }
         )
-    } else {
-        // Layout Scaffold
-        Scaffold(
-            bottomBar = {
-                if (!isTv) {
-                    PhoneBottomNavBar(
-                        activeTab = activeTab,
-                        onTabSelected = { activeTab = it },
-                        profile = profile
-                    )
-                }
-            },
-            containerColor = Color(profile.branding.backgroundColor)
-        ) { innerPadding ->
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = if (!isTv) innerPadding.calculateBottomPadding() else 0.dp)
-        ) {
-            // TV Left Navigation Rail
-            if (isTv) {
-                TvNavigationRail(
-                    activeTab = activeTab,
-                    onTabSelected = { activeTab = it },
-                    profile = profile
-                )
-            }
-
+    } else {        // Layout Scaffold
+        AppShell(
+            profile = profile,
+            deviceType = deviceType,
+            navigationState = navigationState
+        ) { activeDestination ->
             // Main Active Panel View
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .weight(1f)
                     .background(Color(profile.branding.backgroundColor))
                     .padding(16.dp)
             ) {
-                when (activeTab) {
-                    "HOME" -> HomeDashboardView(
+                when (navigationState.activeDestination) {
+                    AppDestination.HOME -> HomeDashboardView(
                         profile = profile,
                         repository = repository,
                         favorites = favorites,
@@ -385,7 +365,7 @@ fun HomeScreen(
                         onPlayEpisode = onPlayEpisode,
                         onSeriesClick = { activeSeriesDetail = it },
                         isTv = isTv,
-                        onTabSelected = { activeTab = it },
+                        onTabSelected = { navigationState.navigateTo(AppDestination.fromKey(it) ?: AppDestination.HOME, profile.features) },
                         onToggleFavorite = toggleFavorite,
                         homeUiState = homeUiState,
                         footballMatches = footballState.matches,
@@ -458,7 +438,7 @@ fun HomeScreen(
                             }
                         }
                     )
-                    "LIVE" -> if (profile.features.liveTvEnabled) {
+                    AppDestination.LIVE -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
                             channels = liveState.channels,
                             categories = liveState.categories,
@@ -500,7 +480,7 @@ fun HomeScreen(
                             onDismissParentalLoadError = liveViewModel::dismissParentalLoadError
                         )
                     }
-                    "MOVIES" -> if (profile.features.moviesEnabled) {
+                    AppDestination.MOVIES -> if (profile.features.moviesEnabled) {
                         MoviesLibraryView(
                             movies = displayMovies,
                             categories = categoriesMovie,
@@ -514,7 +494,7 @@ fun HomeScreen(
                             onToggleFavorite = toggleFavorite
                         )
                     }
-                    "SERIES" -> if (profile.features.seriesEnabled) {
+                    AppDestination.SERIES -> if (profile.features.seriesEnabled) {
                         SeriesLibraryView(
                             seriesList = displaySeries,
                             categories = categoriesSeries,
@@ -528,7 +508,7 @@ fun HomeScreen(
                             onToggleFavorite = toggleFavorite
                         )
                     }
-                    "EPG" -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
+                    AppDestination.EPG -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
                         TvGuideView(
                             uiState = epgState,
                             onSelectChannel = epgViewModel::selectChannel,
@@ -550,7 +530,7 @@ fun HomeScreen(
                             profile = profile
                         )
                     }
-                    "SEARCH" -> if (profile.features.searchEnabled) {
+                    AppDestination.SEARCH -> if (profile.features.searchEnabled) {
                         SearchPanel(
                             query = searchQuery,
                             onQueryChanged = { searchQuery = it },
@@ -564,7 +544,7 @@ fun HomeScreen(
                             onToggleFavorite = toggleFavorite
                         )
                     }
-                    "SETTINGS" -> SettingsView(
+                    AppDestination.SETTINGS -> SettingsView(
                         profile = profile,
                         repository = repository,
                         onNavigateToSupport = onNavigateToSupport,
@@ -578,8 +558,6 @@ fun HomeScreen(
             }
         }
     }
-}
-
     activeSeriesDetail?.let { series ->
         SeriesDetailsDialog(
             series = series,
@@ -655,223 +633,6 @@ fun HomeScreen(
 
 // --- Dynamic Navigation Components ---
 
-@Composable
-fun PhoneBottomNavBar(
-    activeTab: String,
-    onTabSelected: (String) -> Unit,
-    profile: com.example.config.ProviderProfile
-) {
-    NavigationBar(
-        containerColor = Color(profile.branding.surfaceColor),
-        contentColor = Color.White
-    ) {
-        NavigationBarItem(
-            selected = activeTab == "HOME",
-            onClick = { onTabSelected("HOME") },
-            icon = { Icon(Icons.Default.Home, "Home") },
-            label = { Text("Home") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color.White,
-                selectedTextColor = Color.White,
-                indicatorColor = Color(profile.branding.primaryColor),
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            ),
-            modifier = Modifier.testTag("nav_home")
-        )
-        if (profile.features.liveTvEnabled) {
-            NavigationBarItem(
-                selected = activeTab == "LIVE",
-                onClick = { onTabSelected("LIVE") },
-                icon = { Icon(Icons.Default.Tv, "Live") },
-                label = { Text("Live") },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color.White,
-                    selectedTextColor = Color.White,
-                    indicatorColor = Color(profile.branding.primaryColor),
-                    unselectedIconColor = Color.Gray,
-                    unselectedTextColor = Color.Gray
-                ),
-                modifier = Modifier.testTag("nav_live")
-            )
-        }
-        if (profile.features.moviesEnabled) {
-            NavigationBarItem(
-                selected = activeTab == "MOVIES",
-                onClick = { onTabSelected("MOVIES") },
-                icon = { Icon(Icons.Default.Movie, "Movies") },
-                label = { Text("Movies") },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color.White,
-                    selectedTextColor = Color.White,
-                    indicatorColor = Color(profile.branding.primaryColor),
-                    unselectedIconColor = Color.Gray,
-                    unselectedTextColor = Color.Gray
-                ),
-                modifier = Modifier.testTag("nav_movies")
-            )
-        }
-        if (profile.features.seriesEnabled) {
-            NavigationBarItem(
-                selected = activeTab == "SERIES",
-                onClick = { onTabSelected("SERIES") },
-                icon = { Icon(Icons.Default.VideoLibrary, "Series") },
-                label = { Text("Series") },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = Color.White,
-                    selectedTextColor = Color.White,
-                    indicatorColor = Color(profile.branding.primaryColor),
-                    unselectedIconColor = Color.Gray,
-                    unselectedTextColor = Color.Gray
-                ),
-                modifier = Modifier.testTag("nav_series")
-            )
-        }
-        NavigationBarItem(
-            selected = activeTab == "SETTINGS",
-            onClick = { onTabSelected("SETTINGS") },
-            icon = { Icon(Icons.Default.Settings, "Settings") },
-            label = { Text("More") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = Color.White,
-                selectedTextColor = Color.White,
-                indicatorColor = Color(profile.branding.primaryColor),
-                unselectedIconColor = Color.Gray,
-                unselectedTextColor = Color.Gray
-            ),
-            modifier = Modifier.testTag("nav_settings")
-        )
-    }
-}
 
-@Composable
-fun TvNavigationRail(
-    activeTab: String,
-    onTabSelected: (String) -> Unit,
-    profile: com.example.config.ProviderProfile
-) {
-    NavigationRail(
-        containerColor = Color(profile.branding.surfaceColor),
-        header = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 16.dp)) {
-                Icon(
-                    imageVector = Icons.Default.Tv,
-                    contentDescription = "App Logo",
-                    tint = Color(profile.branding.primaryColor),
-                    modifier = Modifier.size(36.dp)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = profile.branding.logoText,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        },
-        modifier = Modifier.fillMaxHeight()
-    ) {
-        Column(
-            modifier = Modifier.fillMaxHeight(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            TvRailItem(
-                selected = activeTab == "HOME",
-                onClick = { onTabSelected("HOME") },
-                icon = Icons.Default.Home,
-                label = "Home",
-                profile = profile
-            )
-            if (profile.features.liveTvEnabled) {
-                TvRailItem(
-                    selected = activeTab == "LIVE",
-                    onClick = { onTabSelected("LIVE") },
-                    icon = Icons.Default.Tv,
-                    label = "Live TV",
-                    profile = profile
-                )
-            }
-            if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
-                TvRailItem(
-                    selected = activeTab == "EPG",
-                    onClick = { onTabSelected("EPG") },
-                    icon = Icons.Default.CalendarMonth,
-                    label = "Guide",
-                    profile = profile
-                )
-            }
-            if (profile.features.moviesEnabled) {
-                TvRailItem(
-                    selected = activeTab == "MOVIES",
-                    onClick = { onTabSelected("MOVIES") },
-                    icon = Icons.Default.Movie,
-                    label = "Movies",
-                    profile = profile
-                )
-            }
-            if (profile.features.seriesEnabled) {
-                TvRailItem(
-                    selected = activeTab == "SERIES",
-                    onClick = { onTabSelected("SERIES") },
-                    icon = Icons.Default.VideoLibrary,
-                    label = "Series",
-                    profile = profile
-                )
-            }
-            TvRailItem(
-                selected = activeTab == "SETTINGS",
-                onClick = { onTabSelected("SETTINGS") },
-                icon = Icons.Default.Settings,
-                label = "Settings",
-                profile = profile
-            )
-        }
-    }
-}
 
-@Composable
-fun TvRailItem(
-    selected: Boolean,
-    onClick: () -> Unit,
-    icon: ImageVector,
-    label: String,
-    profile: com.example.config.ProviderProfile
-) {
-    var isFocused by remember { mutableStateOf(false) }
-    
-    Box(
-        modifier = Modifier
-            .padding(vertical = 4.dp)
-            .size(64.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                when {
-                    selected -> Color(profile.branding.primaryColor)
-                    isFocused -> Color.White.copy(alpha = 0.1f)
-                    else -> Color.Transparent
-                }
-            )
-            .onFocusChanged { isFocused = it.isFocused }
-            .focusable()
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = if (selected || isFocused) Color.White else Color.Gray,
-                modifier = Modifier.size(24.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (selected || isFocused) Color.White else Color.Gray,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
+

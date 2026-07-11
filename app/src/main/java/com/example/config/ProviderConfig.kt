@@ -44,7 +44,11 @@ data class FeatureConfig(
     val updateCheckerEnabled: Boolean = true,
     val announcementsEnabled: Boolean = true,
     val multiViewEnabled: Boolean = true,
-    val footballScheduleEnabled: Boolean = true
+    val footballScheduleEnabled: Boolean = true,
+    val externalPlayerEnabled: Boolean = false,
+    val pictureInPictureEnabled: Boolean = false,
+    val mediaSessionEnabled: Boolean = false,
+    val footballChannelOverridesEnabled: Boolean = false
 )
 
 data class BrandingConfig(

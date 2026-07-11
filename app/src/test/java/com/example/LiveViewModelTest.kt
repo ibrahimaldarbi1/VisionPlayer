@@ -3894,4 +3894,156 @@ class LiveViewModelTest {
 
         job.cancel()
     }
+
+    @Test
+    fun testParentalCategoryPolicy_filtersLockedCategoriesAndAdultContent() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(
+                createCategory("cat1", "Kids Category"),
+                createCategory("cat2", "Locked Category"),
+                createCategory("cat3", "Adult Category")
+            ))
+            channelsEmissions = listOf(listOf(
+                createChannel("ch1", "Channel 1", "cat1"),
+                createChannel("ch2", "Channel 2", "cat2"),
+                createChannel("ch3", "Channel 3", "cat3").copy(isAdult = true)
+            ))
+        }
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        vm.onProfileChanged(createParentalProfile("prov_1", parentalEnabled = true))
+        advanceUntilIdle()
+
+        // Configure parental control with cat2 locked, and adult content hidden
+        fakeParental.statusFlow.emit(LiveParentalStatus(
+            pinConfigured = true,
+            lockedCategoryIds = setOf("cat2"),
+            hideAdultContent = true
+        ))
+        advanceUntilIdle()
+
+        // 1. Locked category "cat2" should be hidden from visible categories
+        val visibleCategories = vm.uiState.value.categories
+        assertTrue(visibleCategories.any { it.id == "cat1" })
+        assertFalse(visibleCategories.any { it.id == "cat2" }) // Locked category hidden
+        assertTrue(visibleCategories.any { it.id == "cat3" })
+
+        // 2. Locked category channels and isAdult channels should be hidden from visible channels
+        val visibleChannels = vm.uiState.value.channels
+        assertTrue(visibleChannels.any { it.id == "ch1" })
+        assertFalse(visibleChannels.any { it.id == "ch2" }) // Belongs to locked category, hidden
+        assertFalse(visibleChannels.any { it.id == "ch3" }) // isAdult channel, hidden
+    }
+
+    @Test
+    fun testCategorySelection_pinGated() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(
+                createCategory("cat1", "Kids"),
+                createCategory("cat2", "Locked")
+            ))
+        }
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        vm.onProfileChanged(createParentalProfile("prov_1", parentalEnabled = true))
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(
+            pinConfigured = true,
+            lockedCategoryIds = setOf("cat2"),
+            hideAdultContent = false
+        ))
+        advanceUntilIdle()
+
+        // Selecting unlocked category "cat1" immediately proceeds
+        vm.selectCategory("cat1")
+        advanceUntilIdle()
+        assertEquals("cat1", vm.uiState.value.selectedCategoryId)
+        assertFalse(vm.uiState.value.pinDialogVisible)
+
+        // Selecting locked category "cat2" triggers PIN dialog and sets pendingParentalCategoryId
+        vm.selectCategory("cat2")
+        advanceUntilIdle()
+        assertEquals("cat1", vm.uiState.value.selectedCategoryId) // selection not updated yet
+        assertTrue(vm.uiState.value.pinDialogVisible)
+        assertEquals("cat2", vm.uiState.value.pendingParentalCategoryId)
+        assertNull(vm.uiState.value.pendingParentalChannel)
+    }
+
+    @Test
+    fun testCategorySelection_unlocksOnCorrectPin() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(
+                createCategory("cat1", "Kids"),
+                createCategory("cat2", "Locked")
+            ))
+        }
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        vm.onProfileChanged(createParentalProfile("prov_1", parentalEnabled = true))
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(
+            pinConfigured = true,
+            lockedCategoryIds = setOf("cat2"),
+            hideAdultContent = false
+        ))
+        advanceUntilIdle()
+
+        vm.selectCategory("cat2")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.pinDialogVisible)
+
+        // Verify with incorrect PIN
+        fakeParental.mockPinVerificationResult = false
+        vm.submitParentalPin("9999")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.pinDialogVisible)
+        assertNotNull(vm.uiState.value.pinVerificationError)
+
+        // Verify with correct PIN
+        fakeParental.mockPinVerificationResult = true
+        vm.submitParentalPin("1234")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.pinDialogVisible)
+        assertEquals("cat2", vm.uiState.value.selectedCategoryId)
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+    }
+
+    @Test
+    fun testPendingTargets_areMutuallyExclusive() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            observeEmissions = listOf(listOf(
+                createCategory("cat1", "Kids"),
+                createCategory("cat2", "Locked")
+            ))
+            channelsEmissions = listOf(listOf(
+                createChannel("ch1", "Channel 1", "cat1")
+            ))
+        }
+        val vm = LiveViewModel(fake, fakeFavorites, fakeParental)
+        vm.onLiveVisibilityChanged(true)
+        vm.onProfileChanged(createParentalProfile("prov_1", parentalEnabled = true))
+        advanceUntilIdle()
+
+        fakeParental.statusFlow.emit(LiveParentalStatus(
+            pinConfigured = true,
+            lockedCategoryIds = setOf("cat2"),
+            hideAdultContent = false
+        ))
+        advanceUntilIdle()
+
+        // Set pending category
+        vm.selectCategory("cat2")
+        advanceUntilIdle()
+        assertEquals("cat2", vm.uiState.value.pendingParentalCategoryId)
+        assertNull(vm.uiState.value.pendingParentalChannel)
+
+        // Select a locked channel, pending category is cancelled, channel becomes pending
+        val lockedChannel = createChannel("ch2", "Locked Channel", "cat1").copy(isLocked = true)
+        vm.onChannelSelected(lockedChannel)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.pendingParentalCategoryId)
+        assertEquals("ch2", vm.uiState.value.pendingParentalChannel?.id)
+    }
 }

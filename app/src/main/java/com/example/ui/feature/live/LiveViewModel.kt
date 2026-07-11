@@ -99,22 +99,72 @@ class LiveViewModel(
     )
 
     private var activeChannelRequestKey: ChannelRequestKey? = null
+    private var rawVisibleCategories: List<Category> = emptyList()
     private var rawChannels: List<LiveChannel> = emptyList()
 
-    private fun applyVisibleCategoryFilter(
+    private fun applyParentalCategoryPolicy(
+        categories: List<Category>,
+        state: LiveUiState = _uiState.value
+    ): List<Category> {
+        if (!state.parentalControlsEnabled || !state.hideAdultContent) {
+            return categories
+        }
+
+        return categories.filterNot {
+            it.id in state.lockedLiveCategoryIds
+        }
+    }
+
+    private fun applyLiveChannelPolicy(
         channels: List<LiveChannel>,
         state: LiveUiState = _uiState.value
     ): List<LiveChannel> {
-        if (!state.categoryVisibilityReady) {
-            return channels
+        var result = channels
+
+        if (state.categoryVisibilityReady) {
+            val visibleCategoryIds = rawVisibleCategories
+                .map { it.id }
+                .toSet()
+
+            result = result.filter {
+                it.categoryId in visibleCategoryIds
+            }
         }
 
-        val visibleCategoryIds = state.categories
-            .map { it.id }
-            .toSet()
+        if (state.parentalControlsEnabled && state.hideAdultContent) {
+            result = result.filterNot { channel ->
+                channel.isAdult || channel.categoryId in state.lockedLiveCategoryIds
+            }
+        }
 
-        return channels.filter {
-            it.categoryId in visibleCategoryIds
+        return result
+    }
+
+    private fun checkSelectedCategoryValidity() {
+        val state = _uiState.value
+        val selectedCategoryId = state.selectedCategoryId ?: return
+        val providerId = currentProviderId ?: return
+
+        val displayedCategoryIds = state.categories.map { it.id }.toSet()
+        val isInvalid = selectedCategoryId !in displayedCategoryIds
+
+        if (isInvalid) {
+            cancelPinVerificationIfForCategory(selectedCategoryId)
+            _uiState.update { current ->
+                val pendingCategoryCleared = if (current.pendingParentalCategoryId == selectedCategoryId) null else current.pendingParentalCategoryId
+                current.copy(
+                    selectedCategoryId = null,
+                    pendingParentalCategoryId = pendingCategoryCleared
+                )
+            }
+            loadChannels(providerId, null)
+        }
+    }
+
+    private fun cancelPinVerificationIfForCategory(categoryId: String) {
+        val state = _uiState.value
+        if (state.pendingParentalCategoryId == categoryId) {
+            cancelPinVerification(invalidate = true, clearLoading = true)
         }
     }
 
@@ -193,6 +243,7 @@ class LiveViewModel(
             validPinEnteredForCurrentGeneration = false
 
             // Clear old provider channels and categories
+            rawVisibleCategories = emptyList()
             rawChannels = emptyList()
 
             _uiState.update { currentState ->
@@ -227,7 +278,10 @@ class LiveViewModel(
                     pinDialogVisible = false,
                     pendingParentalChannel = null,
                     pinVerificationLoading = false,
-                    pinVerificationError = null
+                    pinVerificationError = null,
+                    lockedLiveCategoryIds = emptySet(),
+                    hideAdultContent = false,
+                    pendingParentalCategoryId = null
                 )
             }
 
@@ -301,7 +355,7 @@ class LiveViewModel(
                     cancelPinVerification(invalidate = true, clearLoading = true)
                     validPinEnteredForCurrentGeneration = false
                     _uiState.update { currentState ->
-                        currentState.copy(
+                        val baseState = currentState.copy(
                             parentalControlsEnabled = false,
                             parentalReady = false,
                             parentalPinConfigured = false,
@@ -311,7 +365,14 @@ class LiveViewModel(
                             pinDialogVisible = false,
                             pendingParentalChannel = null,
                             pinVerificationLoading = false,
-                            pinVerificationError = null
+                            pinVerificationError = null,
+                            lockedLiveCategoryIds = emptySet(),
+                            hideAdultContent = false,
+                            pendingParentalCategoryId = null
+                        )
+                        baseState.copy(
+                            categories = applyParentalCategoryPolicy(rawVisibleCategories, baseState),
+                            channels = applyLiveChannelPolicy(rawChannels, baseState)
                         )
                     }
                 }
@@ -330,35 +391,25 @@ class LiveViewModel(
                         _uiState.update { current ->
                             current.copy(
                                 categoryVisibilityReady = false,
-                                channels = rawChannels
+                                channels = applyLiveChannelPolicy(rawChannels, current)
                             )
                         }
                     } else {
                         val categories = snapshot.visibleCategories
-                        val visibleIds = categories.map { it.id }.toSet()
-                        val selectedCategoryId = _uiState.value.selectedCategoryId
-                        val selectedStillVisible = selectedCategoryId == null || selectedCategoryId in visibleIds
+                        rawVisibleCategories = categories
 
                         _uiState.update { current ->
                             val updated = current.copy(
-                                categories = categories,
+                                categories = applyParentalCategoryPolicy(rawVisibleCategories, current),
                                 categoryVisibilityReady = true,
                                 categoriesError = null
                             )
                             updated.copy(
-                                channels = applyVisibleCategoryFilter(rawChannels, updated)
+                                channels = applyLiveChannelPolicy(rawChannels, updated)
                             )
                         }
 
-                        if (!selectedStillVisible) {
-                            _uiState.update {
-                                it.copy(selectedCategoryId = null)
-                            }
-                            loadChannels(
-                                providerId = providerId,
-                                categoryId = null
-                            )
-                        }
+                        checkSelectedCategoryValidity()
                     }
                 }
             } catch (e: CancellationException) {
@@ -416,8 +467,9 @@ class LiveViewModel(
                                 hasLoadedCategories = true
                             )
                         } else {
+                            rawVisibleCategories = categories
                             current.copy(
-                                categories = categories,
+                                categories = applyParentalCategoryPolicy(rawVisibleCategories, current),
                                 hasLoadedCategories = true
                             )
                         }
@@ -510,7 +562,7 @@ class LiveViewModel(
                     rawChannels = channels
                     _uiState.update { currentState ->
                         currentState.copy(
-                            channels = applyVisibleCategoryFilter(channels, currentState),
+                            channels = applyLiveChannelPolicy(channels, currentState),
                             hasLoadedChannels = true,
                             channelsLoading = false,
                             initialLoading = false,
@@ -542,14 +594,71 @@ class LiveViewModel(
         }
     }
 
-    fun selectCategory(categoryId: String?) {
+    private fun applyCategorySelection(categoryId: String?) {
         val normalized = if (categoryId.isNullOrBlank()) null else categoryId
-        if (_uiState.value.selectedCategoryId == normalized) return
+        if (_uiState.value.selectedCategoryId == normalized) {
+            _uiState.update { it.copy(pendingParentalCategoryId = null) }
+            return
+        }
 
-        _uiState.update { it.copy(selectedCategoryId = normalized) }
+        _uiState.update {
+            it.copy(
+                selectedCategoryId = normalized,
+                pendingParentalCategoryId = null
+            )
+        }
 
         currentProviderId?.let { providerId ->
             loadChannels(providerId, normalized)
+        }
+    }
+
+    fun selectCategory(categoryId: String?) {
+        val normalizedCategoryId = if (categoryId.isNullOrBlank()) null else categoryId
+        if (normalizedCategoryId == null) {
+            applyCategorySelection(null)
+            return
+        }
+
+        val state = _uiState.value
+        val isLocked = normalizedCategoryId in state.lockedLiveCategoryIds
+
+        if (!state.parentalControlsEnabled || !isLocked) {
+            applyCategorySelection(normalizedCategoryId)
+            return
+        }
+
+        if (state.hideAdultContent) {
+            // Ignore the selection, do not load, do not show dialog
+            return
+        }
+
+        if (state.parentalSessionUnlocked) {
+            applyCategorySelection(normalizedCategoryId)
+            return
+        }
+
+        if (!state.parentalReady) {
+            _uiState.update {
+                it.copy(
+                    pendingParentalCategoryId = normalizedCategoryId,
+                    pendingParentalChannel = null
+                )
+            }
+            return
+        }
+
+        if (state.parentalPinConfigured) {
+            _uiState.update {
+                it.copy(
+                    pendingParentalCategoryId = normalizedCategoryId,
+                    pendingParentalChannel = null,
+                    pinDialogVisible = true,
+                    pinVerificationError = null
+                )
+            }
+        } else {
+            applyCategorySelection(normalizedCategoryId)
         }
     }
 
@@ -819,15 +928,20 @@ class LiveViewModel(
                     }
 
                     val pinConfigured = status.pinConfigured
+                    val lockedCategoryIds = status.lockedCategoryIds
+                    val hideAdultContent = status.hideAdultContent
+
                     _uiState.update { currentState ->
-                        if (!pinConfigured) {
+                        val baseState = if (!pinConfigured) {
                             currentState.copy(
                                 parentalReady = true,
                                 parentalPinConfigured = false,
                                 parentalSessionUnlocked = true,
                                 pinDialogVisible = false,
                                 parentalLoading = false,
-                                parentalLoadError = null
+                                parentalLoadError = null,
+                                lockedLiveCategoryIds = lockedCategoryIds,
+                                hideAdultContent = hideAdultContent
                             )
                         } else {
                             val unlocked = validPinEnteredForCurrentGeneration
@@ -836,12 +950,40 @@ class LiveViewModel(
                                 parentalPinConfigured = true,
                                 parentalSessionUnlocked = unlocked,
                                 parentalLoading = false,
-                                parentalLoadError = null
+                                parentalLoadError = null,
+                                lockedLiveCategoryIds = lockedCategoryIds,
+                                hideAdultContent = hideAdultContent
                             )
+                        }
+
+                        baseState.copy(
+                            categories = applyParentalCategoryPolicy(rawVisibleCategories, baseState),
+                            channels = applyLiveChannelPolicy(rawChannels, baseState)
+                        )
+                    }
+
+                    checkSelectedCategoryValidity()
+
+                    // Handle pending actions after status emission
+                    val state = _uiState.value
+                    val pendingChannel = state.pendingParentalChannel
+                    val pendingCategoryId = state.pendingParentalCategoryId
+
+                    if (hideAdultContent) {
+                        val isPendingChannelHidden = pendingChannel != null && (pendingChannel.isAdult || pendingChannel.categoryId in lockedCategoryIds)
+                        val isPendingCategoryHidden = pendingCategoryId != null && pendingCategoryId in lockedCategoryIds
+
+                        if (isPendingChannelHidden || isPendingCategoryHidden) {
+                            cancelPinVerification(invalidate = true, clearLoading = true)
+                            _uiState.update { it.copy(
+                                pinDialogVisible = false,
+                                pendingParentalChannel = null,
+                                pendingParentalCategoryId = null
+                            ) }
+                            return@collect
                         }
                     }
 
-                    val pendingChannel = _uiState.value.pendingParentalChannel
                     if (pendingChannel != null) {
                         if (!pinConfigured) {
                             if (parentalGeneration == requestGeneration && currentProviderId == providerId) {
@@ -855,6 +997,21 @@ class LiveViewModel(
                                 _uiState.update { it.copy(pinDialogVisible = true, pinVerificationError = null) }
                             } else {
                                 _uiState.update { it.copy(pendingParentalChannel = null) }
+                            }
+                        }
+                    } else if (pendingCategoryId != null) {
+                        if (!pinConfigured) {
+                            if (parentalGeneration == requestGeneration && currentProviderId == providerId) {
+                                if (isLiveVisible) {
+                                    applyCategorySelection(pendingCategoryId)
+                                }
+                                _uiState.update { it.copy(pendingParentalCategoryId = null) }
+                            }
+                        } else {
+                            if (isLiveVisible) {
+                                _uiState.update { it.copy(pinDialogVisible = true, pinVerificationError = null) }
+                            } else {
+                                _uiState.update { it.copy(pendingParentalCategoryId = null) }
                             }
                         }
                     }
@@ -884,15 +1041,24 @@ class LiveViewModel(
         observerJob.start()
     }
 
-    private fun requiresParentalUnlock(channel: LiveChannel): Boolean {
-        return channel.isAdult || channel.isLocked
+    private fun requiresParentalUnlock(
+        channel: LiveChannel,
+        state: LiveUiState = _uiState.value
+    ): Boolean {
+        return channel.isAdult ||
+                channel.isLocked ||
+                channel.categoryId in state.lockedLiveCategoryIds
     }
 
     fun onChannelSelected(channel: LiveChannel) {
         val state = _uiState.value
         if (!state.featureEnabled || !isLiveVisible) return
 
-        if (!requiresParentalUnlock(channel)) {
+        if (state.parentalControlsEnabled && state.hideAdultContent && (channel.isAdult || channel.categoryId in state.lockedLiveCategoryIds)) {
+            return
+        }
+
+        if (!requiresParentalUnlock(channel, state)) {
             emitPlayChannel(channel)
             return
         }
@@ -910,7 +1076,12 @@ class LiveViewModel(
         if (state.pinVerificationLoading) return
 
         if (!state.parentalReady) {
-            _uiState.update { it.copy(pendingParentalChannel = channel) }
+            _uiState.update {
+                it.copy(
+                    pendingParentalChannel = channel,
+                    pendingParentalCategoryId = null
+                )
+            }
             return
         }
 
@@ -918,6 +1089,7 @@ class LiveViewModel(
             _uiState.update { currentState ->
                 currentState.copy(
                     pendingParentalChannel = channel,
+                    pendingParentalCategoryId = null,
                     pinDialogVisible = true,
                     pinVerificationError = null
                 )
@@ -936,10 +1108,18 @@ class LiveViewModel(
         val state = _uiState.value
         val providerId = currentProviderId
         val pendingChannel = state.pendingParentalChannel
+        val pendingCategoryId = state.pendingParentalCategoryId
+
+        // Require exactly one pending action
+        val hasPendingChannel = pendingChannel != null
+        val hasPendingCategory = pendingCategoryId != null
+        if (!(hasPendingChannel xor hasPendingCategory)) {
+            return
+        }
+
         if (!state.parentalControlsEnabled ||
             providerId == null ||
             !state.pinDialogVisible ||
-            pendingChannel == null ||
             !state.parentalReady ||
             !state.parentalPinConfigured ||
             state.pinVerificationLoading
@@ -952,6 +1132,7 @@ class LiveViewModel(
         val requestParentalGen = parentalGeneration
         val requestProviderId = providerId
         val requestPendingChannel = pendingChannel
+        val requestPendingCategoryId = pendingCategoryId
 
         _uiState.update { currentState ->
             currentState.copy(
@@ -970,7 +1151,8 @@ class LiveViewModel(
                     currentProviderId != requestProviderId ||
                     !_uiState.value.parentalControlsEnabled ||
                     !_uiState.value.pinDialogVisible ||
-                    _uiState.value.pendingParentalChannel != requestPendingChannel
+                    _uiState.value.pendingParentalChannel != requestPendingChannel ||
+                    _uiState.value.pendingParentalCategoryId != requestPendingCategoryId
                 ) {
                     return@launch
                 }
@@ -985,11 +1167,16 @@ class LiveViewModel(
                             parentalSessionUnlocked = true,
                             pinDialogVisible = false,
                             pendingParentalChannel = null,
+                            pendingParentalCategoryId = null,
                             pinVerificationLoading = false,
                             pinVerificationError = null
                         )
                     }
-                    emitPlayChannel(requestPendingChannel)
+                    if (requestPendingChannel != null) {
+                        emitPlayChannel(requestPendingChannel)
+                    } else if (requestPendingCategoryId != null) {
+                        applyCategorySelection(requestPendingCategoryId)
+                    }
                 } else {
                     _uiState.update { currentState ->
                         currentState.copy(
@@ -1006,7 +1193,8 @@ class LiveViewModel(
                     currentProviderId == requestProviderId &&
                     _uiState.value.parentalControlsEnabled &&
                     _uiState.value.pinDialogVisible &&
-                    _uiState.value.pendingParentalChannel == requestPendingChannel
+                    _uiState.value.pendingParentalChannel == requestPendingChannel &&
+                    _uiState.value.pendingParentalCategoryId == requestPendingCategoryId
                 ) {
                     _uiState.update { currentState ->
                         currentState.copy(
@@ -1032,6 +1220,7 @@ class LiveViewModel(
             currentState.copy(
                 pinDialogVisible = false,
                 pendingParentalChannel = null,
+                pendingParentalCategoryId = null,
                 pinVerificationLoading = false,
                 pinVerificationError = null
             )
@@ -1061,14 +1250,29 @@ class LiveViewModel(
         if (!visible) {
             cancelPinVerification(invalidate = true, clearLoading = true)
             validPinEnteredForCurrentGeneration = false
+
+            val state = _uiState.value
+            val shouldResetCategory = state.parentalControlsEnabled &&
+                    state.parentalPinConfigured &&
+                    state.selectedCategoryId != null &&
+                    state.selectedCategoryId in state.lockedLiveCategoryIds
+
             _uiState.update { currentState ->
                 currentState.copy(
                     pinDialogVisible = false,
                     pendingParentalChannel = null,
+                    pendingParentalCategoryId = null,
                     pinVerificationLoading = false,
                     pinVerificationError = null,
-                    parentalSessionUnlocked = if (currentState.parentalPinConfigured) false else currentState.parentalSessionUnlocked
+                    parentalSessionUnlocked = if (currentState.parentalPinConfigured) false else currentState.parentalSessionUnlocked,
+                    selectedCategoryId = if (shouldResetCategory) null else currentState.selectedCategoryId
                 )
+            }
+
+            if (shouldResetCategory) {
+                currentProviderId?.let { providerId ->
+                    loadChannels(providerId, null)
+                }
             }
         }
     }
@@ -1082,6 +1286,7 @@ class LiveViewModel(
         cancelFavoriteMutations(clearState = true)
         cancelParentalObserver(invalidate = true, clearLoading = true)
         cancelPinVerification(invalidate = true, clearLoading = true)
+        rawVisibleCategories = emptyList()
         _uiState.update { it.copy(categoryVisibilityReady = false) }
     }
 }

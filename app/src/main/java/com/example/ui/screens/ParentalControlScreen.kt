@@ -45,9 +45,10 @@ fun ParentalControlScreen(
     // Parental Control Parameters
     var adultContentModeHidden by remember { mutableStateOf(false) }
     val lockedCategories = remember { mutableStateListOf<String>() }
+    var categories by remember { mutableStateOf<List<com.example.data.Category>>(emptyList()) }
 
     // Load State
-    LaunchedEffect(Unit) {
+    LaunchedEffect(profile.providerId) {
         val settings = repository.getParentalSettingsDirect()
         if (settings != null) {
             isPinSet = true
@@ -60,6 +61,7 @@ fun ParentalControlScreen(
             isPinSet = false
             isUnlocked = true // Setting up for first time
         }
+        categories = repository.getCachedCategories(profile.providerId)
     }
 
     Box(
@@ -262,7 +264,7 @@ fun ParentalControlScreen(
                         Text("Block Channel Categories", style = MaterialTheme.typography.titleLarge, color = Color.White, fontWeight = FontWeight.Bold)
                     }
 
-                    items(IptvMockData.Categories) { category ->
+                    items(categories) { category ->
                         val isLocked = lockedCategories.contains(category.id)
                         Card(
                             colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),

@@ -35,7 +35,11 @@ data class LiveUiState(
     val pinDialogVisible: Boolean = false,
     val pendingParentalChannel: LiveChannel? = null,
     val pinVerificationLoading: Boolean = false,
-    val pinVerificationError: String? = null
+    val pinVerificationError: String? = null,
+
+    val lockedLiveCategoryIds: Set<String> = emptySet(),
+    val hideAdultContent: Boolean = false,
+    val pendingParentalCategoryId: String? = null
 ) {
     val favoritesError: String?
         get() = favoriteMutationError ?: favoritesLoadError

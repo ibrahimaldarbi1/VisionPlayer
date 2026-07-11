@@ -15,10 +15,9 @@ class RepositoryLiveParentalDataSource(
         return repository
             .parentalSettings
             .map { settings ->
-                LiveParentalStatus(
-                    pinConfigured =
-                        settings != null &&
-                        settings.pin.isNotBlank()
+                LiveParentalPolicyParser.parse(
+                    storedPin = settings?.pin,
+                    storedCategoryPolicy = settings?.lockedCategories
                 )
             }
             .distinctUntilChanged()

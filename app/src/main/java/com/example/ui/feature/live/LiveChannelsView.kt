@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,6 +55,10 @@ fun LiveChannelsView(
     pinDialogVisible: Boolean = false,
     pinVerificationLoading: Boolean = false,
     pinVerificationError: String? = null,
+    lockedLiveCategoryIds: Set<String> = emptySet(),
+    parentalSessionUnlocked: Boolean = false,
+    pendingParentalChannel: LiveChannel? = null,
+    pendingParentalCategoryId: String? = null,
     onChannelSelected: (LiveChannel) -> Unit = {},
     onSubmitParentalPin: (String) -> Unit = {},
     onCancelParentalDialog: () -> Unit = {},
@@ -75,9 +80,17 @@ fun LiveChannelsView(
             title = { Text("Parental Control PIN Required") },
             text = {
                 Column {
-                    Text("This channel is locked or labeled as adult content.")
+                    val textDesc = when {
+                        pendingParentalChannel != null -> "Enter PIN to play ${pendingParentalChannel.name}."
+                        pendingParentalCategoryId != null -> {
+                            val categoryName = categories.firstOrNull { it.id == pendingParentalCategoryId }?.name ?: ""
+                            "Enter PIN to browse category $categoryName."
+                        }
+                        else -> "Enter PIN to proceed."
+                    }
+                    Text(textDesc)
                     Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
+                    TextField(
                         value = pinInput,
                         onValueChange = { value ->
                             pinInput = value.filter { it.isDigit() }.take(4)
@@ -85,8 +98,10 @@ fun LiveChannelsView(
                         label = { Text("Enter 4-Digit PIN") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(profile.branding.primaryColor),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedIndicatorColor = Color(profile.branding.primaryColor),
                             focusedLabelColor = Color(profile.branding.primaryColor)
                         ),
                         modifier = Modifier.testTag("parental_pin_input_field")
@@ -115,7 +130,7 @@ fun LiveChannelsView(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        Text("Unlock Channel")
+                        Text("Unlock")
                     }
                 }
             },
@@ -274,10 +289,23 @@ fun LiveChannelsView(
                     )
                 }
                 items(categories) { cat ->
+                    val showCategoryLock = cat.id in lockedLiveCategoryIds && !parentalSessionUnlocked
                     FilterChip(
                         selected = selectedCategory == cat.id,
                         onClick = { onCategorySelected(cat.id) },
-                        label = { Text(cat.name) },
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(cat.name)
+                                if (showCategoryLock) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Locked Category",
+                                        modifier = Modifier.size(12.dp).testTag("category_lock_indicator_${cat.id}")
+                                    )
+                                }
+                            }
+                        },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = Color(profile.branding.primaryColor),
                             selectedLabelColor = Color.White
@@ -444,7 +472,11 @@ fun LiveChannelsView(
                         title = channel.name,
                         imageUrl = channel.logoUrl,
                         subtitle = channel.categoryName,
-                        isLocked = if (parentalControlsEnabled) (channel.isAdult || channel.isLocked) else false,
+                        isLocked = if (parentalSessionUnlocked) {
+                            false
+                        } else {
+                            channel.isAdult || channel.isLocked || channel.categoryId in lockedLiveCategoryIds
+                        },
                         isFavorite = isFav,
                         onFavoriteToggle = if (favoritesEnabled && !favoriteMutationInProgress) {
                             {

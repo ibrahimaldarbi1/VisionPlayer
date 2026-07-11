@@ -155,6 +155,11 @@ class IptvRepository(
 
     // --- Core Content Fetching (Categories, Live, Movies, Series) ---
 
+    suspend fun getCachedCategories(providerId: String): List<Category> = withContext(Dispatchers.IO) {
+        val cached = dao.observeCategories("live").firstOrNull() ?: emptyList()
+        cached.map { it.toDomain() }
+    }
+
     fun getCategories(type: String): Flow<List<Category>> = flow {
         // First look in Room cache
         val cached = dao.observeCategories(type).firstOrNull() ?: emptyList()

@@ -177,16 +177,16 @@ fun HomeScreen(
     val epgViewModel: com.example.ui.feature.epg.EpgViewModel = viewModel(factory = epgViewModelFactory)
     val epgState by epgViewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(profile) {
+    LaunchedEffect(profile, liveState.providerId, liveState.channels) {
         epgViewModel.onProfileChanged(profile)
+        if (liveState.providerId == profile.providerId) {
+            epgViewModel.onChannelsChanged(
+                providerId = profile.providerId,
+                channels = liveState.channels
+            )
+        }
     }
 
-    LaunchedEffect(profile.providerId, liveState.channels) {
-        epgViewModel.onChannelsChanged(
-            providerId = profile.providerId,
-            channels = liveState.channels
-        )
-    }
 
     LaunchedEffect(activeTab) {
         epgViewModel.onGuideVisibilityChanged(activeTab == "EPG")

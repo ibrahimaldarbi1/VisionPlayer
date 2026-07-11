@@ -2,9 +2,10 @@ package com.example.ui.feature.epg
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.LiveChannel
 import com.example.config.ProviderProfile
+import com.example.data.LiveChannel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +23,21 @@ class EpgViewModel(
     private var programObserverJob: Job? = null
     private var programGeneration: Long = 0L
 
+    private var observedProviderId: String? = null
+    private var observedChannelId: String? = null
+    private var observedLookupKeys: List<String> = emptyList()
+
+    private fun isObserving(
+        providerId: String,
+        channelId: String,
+        lookupKeys: List<String>
+    ): Boolean {
+        return programObserverJob?.isActive == true &&
+                observedProviderId == providerId &&
+                observedChannelId == channelId &&
+                observedLookupKeys == lookupKeys
+    }
+
     fun onProfileChanged(profile: ProviderProfile) {
         val featureEnabled = profile.features.liveTvEnabled && profile.features.epgEnabled
 
@@ -33,6 +49,8 @@ class EpgViewModel(
                     channels = emptyList(),
                     selectedChannelId = null,
                     programs = emptyList(),
+                    programsLoading = false,
+                    programsRefreshing = false,
                     programsError = null
                 )
             }
@@ -48,6 +66,8 @@ class EpgViewModel(
                     channels = emptyList(),
                     selectedChannelId = null,
                     programs = emptyList(),
+                    programsLoading = false,
+                    programsRefreshing = false,
                     programsError = null
                 )
             }
@@ -62,7 +82,7 @@ class EpgViewModel(
         if (!state.featureEnabled || currentProviderId != providerId) return
 
         val normalizedChannels = channels.distinctBy { it.id }
-        
+
         if (normalizedChannels.isEmpty()) {
             cancelProgramObserver(invalidate = true, clearLoading = true)
             _uiState.update {
@@ -80,15 +100,17 @@ class EpgViewModel(
         val oldSelectedChannel = state.selectedChannel
         
         val newSelectedChannel = normalizedChannels.firstOrNull { it.id == oldSelectedId }
-        
+
         if (newSelectedChannel != null) {
             _uiState.update { it.copy(channels = normalizedChannels) }
             val oldKeys = oldSelectedChannel?.let { EpgChannelLookupKeys.forChannel(it) } ?: emptyList()
             val newKeys = EpgChannelLookupKeys.forChannel(newSelectedChannel)
             if (oldKeys != newKeys) {
+                // Channel still exists but keys changed. Refresh.
                 observeSelectedChannel(preservePrograms = true)
             }
         } else {
+            // Selected channel removed
             cancelProgramObserver(invalidate = true, clearLoading = false)
             val firstChannel = normalizedChannels.first()
             _uiState.update {
@@ -110,10 +132,15 @@ class EpgViewModel(
             _uiState.update { it.copy(guideVisible = false) }
             cancelProgramObserver(invalidate = true, clearLoading = true)
         } else {
-            val wasVisible = _uiState.value.guideVisible
             _uiState.update { it.copy(guideVisible = true) }
-            if (!wasVisible && _uiState.value.featureEnabled && _uiState.value.selectedChannelId != null && programObserverJob == null) {
-                observeSelectedChannel(preservePrograms = true)
+            val state = _uiState.value
+            if (state.featureEnabled && state.selectedChannelId != null) {
+                val providerId = currentProviderId ?: return
+                val channel = state.selectedChannel ?: return
+                val lookupKeys = EpgChannelLookupKeys.forChannel(channel)
+                if (!isObserving(providerId, channel.id, lookupKeys)) {
+                    observeSelectedChannel(preservePrograms = true)
+                }
             }
         }
     }
@@ -132,7 +159,7 @@ class EpgViewModel(
                 programsError = null
             )
         }
-        
+
         if (_uiState.value.guideVisible) {
             observeSelectedChannel(preservePrograms = false)
         }
@@ -146,6 +173,8 @@ class EpgViewModel(
 
         cancelProgramObserver(invalidate = true, clearLoading = false)
         
+        val capturedGeneration = programGeneration
+
         if (preservePrograms && state.programs.isNotEmpty()) {
             _uiState.update {
                 it.copy(
@@ -166,10 +195,10 @@ class EpgViewModel(
         }
 
         val lookupKeys = EpgChannelLookupKeys.forChannel(channel)
-        val capturedGeneration = programGeneration
 
         lateinit var observerJob: Job
-        observerJob = viewModelScope.launch {
+
+        observerJob = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 dataSource.observePrograms(providerId, lookupKeys).collect { emittedPrograms ->
                     val currentState = _uiState.value
@@ -189,9 +218,9 @@ class EpgViewModel(
                         }
                     }
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
                 val currentState = _uiState.value
                 if (currentProviderId == providerId &&
                     programGeneration == capturedGeneration &&
@@ -210,10 +239,19 @@ class EpgViewModel(
             } finally {
                 if (programObserverJob === observerJob) {
                     programObserverJob = null
+                    observedProviderId = null
+                    observedChannelId = null
+                    observedLookupKeys = emptyList()
                 }
             }
         }
+
         programObserverJob = observerJob
+        observedProviderId = providerId
+        observedChannelId = channel.id
+        observedLookupKeys = lookupKeys
+
+        observerJob.start()
     }
 
     fun retryPrograms() {
@@ -232,8 +270,12 @@ class EpgViewModel(
         }
         val jobToCancel = programObserverJob
         programObserverJob = null
+        observedProviderId = null
+        observedChannelId = null
+        observedLookupKeys = emptyList()
+
         jobToCancel?.cancel()
-        
+
         if (clearLoading) {
             _uiState.update {
                 it.copy(

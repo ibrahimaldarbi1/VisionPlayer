@@ -4488,4 +4488,57 @@ class LiveViewModelTest {
         
         assertEquals(0, fakeFavorites.observeFavoritesCallCount)
     }
+
+    // 17. Add Live/EPG session continuity test
+    @Test
+    fun testLiveEpgSessionContinuity() = runTest {
+        val channel = LiveChannel("id1", "CH1", "http", "epg1", "cat1", "Adult Cat", "", 1, true, false)
+        val category = Category("cat1", "Adult Cat", "LIVE")
+        
+        val fakeLive = FakeLiveDataSource()
+        fakeLive.categoriesEmissions = listOf(listOf(category)); fakeLive.channelsEmissions = listOf(listOf(channel))
+        
+        val vm = LiveViewModel(fakeLive, fakeFavorites, fakeParental)
+        fakeParental.statusFlow.tryEmit(LiveParentalStatus(pinConfigured = true, hideAdultContent = false, lockedCategoryIds = emptySet())); fakeParental.mockPinVerificationResult = true
+        
+        val profile = createParentalProfile("prov_1", liveTvEnabled = true, parentalEnabled = true)
+        vm.onProfileChanged(profile)
+        vm.onLiveVisibilityChanged(true) // 1. Make Live visible
+        runCurrent()
+        
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(vm.uiState.value.pinDialogVisible)
+        
+        vm.submitParentalPin("1234") // 2. Unlock
+        runCurrent()
+        assertFalse(vm.uiState.value.pinDialogVisible)
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+        
+        // 3. Navigate from Live to EPG (Live Content remains visible)
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
+        assertTrue(vm.uiState.value.parentalSessionUnlocked)
+        
+        // 4. Select another protected channel
+        vm.onChannelSelected(channel)
+        runCurrent()
+        
+        // 5. Verify no second PIN dialog
+        assertFalse(vm.uiState.value.pinDialogVisible)
+        
+        // 6. Report visibility false (leaving both)
+        vm.onLiveVisibilityChanged(false)
+        runCurrent()
+        assertFalse(vm.uiState.value.parentalSessionUnlocked)
+        
+        // 7. Return to a Live-content surface
+        vm.onLiveVisibilityChanged(true)
+        runCurrent()
+        
+        // 8. Verify protected channel requires PIN again
+        vm.onChannelSelected(channel)
+        runCurrent()
+        assertTrue(vm.uiState.value.pinDialogVisible)
+    }
 }

@@ -1,1 +1,0 @@
-sed -i 's/liveViewModel.onLiveVisibilityChanged(activeTab == "LIVE")/liveViewModel.onLiveVisibilityChanged(com.example.ui.feature.live.LiveContentSurfaceVisibilityPolicy.isVisible(activeTab))/' app/src/main/java/com/example/ui/screens/HomeScreen.kt

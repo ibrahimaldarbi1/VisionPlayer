@@ -22,10 +22,28 @@ class LiveContentSurfaceVisibilityPolicyTest {
     }
 
     @Test
-    fun testOtherTabsAreNotVisible() {
+    fun testMoviesTabIsNotVisible() {
         assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("MOVIES"))
+    }
+
+    @Test
+    fun testSeriesTabIsNotVisible() {
         assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("SERIES"))
+    }
+
+    @Test
+    fun testSearchTabIsNotVisible() {
         assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("SEARCH"))
-        assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("UNKNOWN"))
+    }
+
+    @Test
+    fun testSettingsTabIsNotVisible() {
+        assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("SETTINGS"))
+    }
+
+    @Test
+    fun testMatchingIsCaseSensitive() {
+        assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("live"))
+        assertFalse(LiveContentSurfaceVisibilityPolicy.isVisible("epg"))
     }
 }

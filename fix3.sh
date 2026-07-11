@@ -1,4 +1,0 @@
-sed -i 's/LiveParentalStatus(true, setOf("cat_1"))/LiveParentalStatus(pinConfigured = true, hideAdultContent = true, lockedCategoryIds = setOf("cat_1"))/g' app/src/test/java/com/example/LiveViewModelTest.kt
-sed -i 's/LiveParentalStatus(true, setOf("cat_2"))/LiveParentalStatus(pinConfigured = true, hideAdultContent = true, lockedCategoryIds = setOf("cat_2"))/g' app/src/test/java/com/example/LiveViewModelTest.kt
-sed -i 's/LiveParentalStatus(true, setOf("cat_1"), true)/LiveParentalStatus(pinConfigured = true, hideAdultContent = true, lockedCategoryIds = setOf("cat_1"))/g' app/src/test/java/com/example/LiveViewModelTest.kt
-sed -i 's/LiveParentalStatus(true, setOf("cat_2"), true)/LiveParentalStatus(pinConfigured = true, hideAdultContent = true, lockedCategoryIds = setOf("cat_2"))/g' app/src/test/java/com/example/LiveViewModelTest.kt

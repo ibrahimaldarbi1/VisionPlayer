@@ -53,23 +53,25 @@ fun ParentalControlScreen(
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Load State
-    LaunchedEffect(profile.providerId) {
+    LaunchedEffect(profile.id, profile.providerId) {
+        pinInput = ""
+        confirmPinInput = ""
+        inputError = null
+
         val settings = repository.getParentalSettingsDirect()
-        if (settings != null) {
-            isPinSet = true
-            val status = LiveParentalPolicyParser.parse(
-                storedPin = settings.pin,
-                storedCategoryPolicy = settings.lockedCategories
+        val status = settings?.let {
+            LiveParentalPolicyParser.parse(
+                storedPin = it.pin,
+                storedCategoryPolicy = it.lockedCategories
             )
-            adultContentModeHidden = status.hideAdultContent
-            lockedCategories.clear()
-            lockedCategories.addAll(status.lockedCategoryIds)
-        } else {
-            isPinSet = false
-            isUnlocked = true // Setting up for first time
-            adultContentModeHidden = false
-            lockedCategories.clear()
         }
+        val loadedState = ParentalControlScreenStateMapper.fromStatus(status)
+
+        isPinSet = loadedState.isPinSet
+        isUnlocked = loadedState.isUnlocked
+        adultContentModeHidden = loadedState.hideAdultContent
+        lockedCategories.clear()
+        lockedCategories.addAll(loadedState.lockedCategoryIds)
     }
 
     Box(

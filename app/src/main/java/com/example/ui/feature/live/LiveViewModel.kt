@@ -118,7 +118,7 @@ class LiveViewModel(
             currentProviderId = profile.providerId
 
             // Start visible-category observation
-            observeVisibleCategories(profile.providerId)
+            observeCategoryVisibility(profile.providerId)
 
             // Load/seed categories
             loadCategories(profile.providerId)
@@ -128,46 +128,67 @@ class LiveViewModel(
         }
     }
 
-    private fun observeVisibleCategories(providerId: String) {
+    private fun observeCategoryVisibility(providerId: String) {
         visibleCategoriesJob?.cancel()
         visibleCategoriesJob = viewModelScope.launch {
             try {
-                dataSource.observeVisibleCategories(providerId).collect { categories ->
+                dataSource.observeCategoryVisibility(providerId).collect { snapshot ->
                     if (currentProviderId != providerId) return@collect
 
-                    val visibleIds = categories.map { it.id }.toSet()
-                    val selectedCategoryId = _uiState.value.selectedCategoryId
-                    val selectedStillVisible = selectedCategoryId == null || selectedCategoryId in visibleIds
-
-                    _uiState.update { current ->
-                        val updated = current.copy(
-                            categories = categories,
-                            categoryVisibilityReady = true,
-                            categoriesError = null
-                        )
-                        updated.copy(
-                            channels = applyVisibleCategoryFilter(rawChannels, updated)
-                        )
-                    }
-
-                    if (!selectedStillVisible) {
-                        _uiState.update {
-                            it.copy(selectedCategoryId = null)
+                    if (!snapshot.isAuthoritative) {
+                        _uiState.update { current ->
+                            current.copy(
+                                categoryVisibilityReady = false,
+                                channels = rawChannels
+                            )
                         }
-                        loadChannels(
-                            providerId = providerId,
-                            categoryId = null
-                        )
+                    } else {
+                        val categories = snapshot.visibleCategories
+                        val visibleIds = categories.map { it.id }.toSet()
+                        val selectedCategoryId = _uiState.value.selectedCategoryId
+                        val selectedStillVisible = selectedCategoryId == null || selectedCategoryId in visibleIds
+
+                        _uiState.update { current ->
+                            val updated = current.copy(
+                                categories = categories,
+                                categoryVisibilityReady = true,
+                                categoriesError = null
+                            )
+                            updated.copy(
+                                channels = applyVisibleCategoryFilter(rawChannels, updated)
+                            )
+                        }
+
+                        if (!selectedStillVisible) {
+                            _uiState.update {
+                                it.copy(selectedCategoryId = null)
+                            }
+                            loadChannels(
+                                providerId = providerId,
+                                categoryId = null
+                            )
+                        }
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 if (currentProviderId == providerId) {
-                    _uiState.update { currentState ->
-                        currentState.copy(
-                            categoriesError = "Could not load Live TV categories."
-                        )
+                    val currentReady = _uiState.value.categoryVisibilityReady
+                    if (!currentReady) {
+                        _uiState.update { currentState ->
+                            currentState.copy(
+                                categoriesError = "Could not load Live TV categories.",
+                                categoryVisibilityReady = false,
+                                channels = rawChannels
+                            )
+                        }
+                    } else {
+                        _uiState.update { currentState ->
+                            currentState.copy(
+                                categoriesError = "Could not load Live TV categories."
+                            )
+                        }
                     }
                 }
             }
@@ -390,5 +411,6 @@ class LiveViewModel(
         cancelVisibleCategoriesObserver()
         cancelCategoriesLoad(clearLoading = true)
         cancelChannelsLoad(clearLoading = true)
+        _uiState.update { it.copy(categoryVisibilityReady = false) }
     }
 }

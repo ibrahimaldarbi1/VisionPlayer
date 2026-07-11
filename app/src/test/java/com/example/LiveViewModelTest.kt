@@ -20,6 +20,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+import com.example.ui.feature.live.LiveCategoryVisibilitySnapshot
+
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
@@ -41,8 +43,9 @@ class LiveViewModelTest {
         var categoriesEmissions: List<List<Category>> = emptyList()
         var channelsEmissions: List<List<LiveChannel>> = emptyList()
         var observeEmissions: List<List<Category>> = emptyList()
+        var snapshotEmissions: List<LiveCategoryVisibilitySnapshot> = emptyList()
 
-        val observeFlow = kotlinx.coroutines.flow.MutableSharedFlow<List<Category>>(replay = 1)
+        val observeFlow = kotlinx.coroutines.flow.MutableSharedFlow<Any>(replay = 1)
 
         var categoriesDelayMs: Long = 0L
         var channelsDelayMs: Long = 0L
@@ -66,9 +69,10 @@ class LiveViewModelTest {
         val categoryDelayByProvider = mutableMapOf<String, Long>()
         val channelDelayByRequest = mutableMapOf<Pair<String, String?>, Long>()
         val observeResultsByProvider = mutableMapOf<String, List<List<Category>>>()
+        val visibilitySnapshotsByProvider = mutableMapOf<String, List<LiveCategoryVisibilitySnapshot>>()
         val observeDelayByProvider = mutableMapOf<String, Long>()
 
-        override fun observeVisibleCategories(providerId: String): Flow<List<Category>> = flow {
+        override fun observeCategoryVisibility(providerId: String): Flow<LiveCategoryVisibilitySnapshot> = flow {
             observeCallCount++
             lastObserveProviderId = providerId
             val delayMs = observeDelayByProvider[providerId] ?: observeDelayMs
@@ -76,13 +80,31 @@ class LiveViewModelTest {
                 delay(delayMs)
             }
             observeError?.let { throw it }
-            val emissions = observeResultsByProvider[providerId] ?: observeEmissions
-            if (emissions.isNotEmpty()) {
-                for (em in emissions) {
+            val snapEmissions = visibilitySnapshotsByProvider[providerId] ?: snapshotEmissions
+            if (snapEmissions.isNotEmpty()) {
+                for (em in snapEmissions) {
                     emit(em)
                 }
             } else {
-                observeFlow.collect { emit(it) }
+                val emissions = observeResultsByProvider[providerId] ?: observeEmissions
+                if (emissions.isNotEmpty()) {
+                    for (em in emissions) {
+                        emit(LiveCategoryVisibilitySnapshot(
+                            totalCategoryCount = em.size,
+                            visibleCategories = em
+                        ))
+                    }
+                } else {
+                    observeFlow.collect { item ->
+                        when (item) {
+                            is LiveCategoryVisibilitySnapshot -> emit(item)
+                            is List<*> -> emit(LiveCategoryVisibilitySnapshot(
+                                totalCategoryCount = item.size,
+                                visibleCategories = item.filterIsInstance<Category>()
+                            ))
+                        }
+                    }
+                }
             }
         }
 
@@ -755,7 +777,7 @@ class LiveViewModelTest {
 
         assertEquals(1, vm.uiState.value.channels.size)
 
-        fake.observeFlow.emit(emptyList())
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(totalCategoryCount = 1, visibleCategories = emptyList()))
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.channels.isEmpty())
@@ -892,6 +914,148 @@ class LiveViewModelTest {
 
         vm.onProfileChanged(createEnabledProfile("prov_2"))
 
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+    }
+
+    // 38. Initial empty Room snapshot: categoryVisibilityReady is false, channel remains visible, no false empty state
+    @Test
+    fun testInitialEmptyRoomSnapshot() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            snapshotEmissions = listOf(
+                LiveCategoryVisibilitySnapshot(totalCategoryCount = 0, visibleCategories = emptyList())
+            )
+            channelsEmissions = listOf(
+                listOf(createChannel("chan1", "Channel 1", "cat1"))
+            )
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertEquals("chan1", vm.uiState.value.channels[0].id)
+    }
+
+    // 39. Category request failure with empty Room: channels remain visible, category error is set, readiness remains false
+    @Test
+    fun testCategoryRequestFailureWithEmptyRoom() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            snapshotEmissions = listOf(
+                LiveCategoryVisibilitySnapshot(totalCategoryCount = 0, visibleCategories = emptyList())
+            )
+            categoriesError = RuntimeException("Category load failed")
+            channelsEmissions = listOf(
+                listOf(createChannel("chan1", "Channel 1", "cat1"))
+            )
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertNotNull(vm.uiState.value.categoriesError)
+    }
+
+    // 40. Categories inserted later: total count goes from 0 to 2, and then filtering becomes active
+    @Test
+    fun testCategoriesInsertedLater() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            channelsEmissions = listOf(
+                listOf(createChannel("chan1", "Channel 1", "cat1"), createChannel("chan2", "Channel 2", "cat2"))
+            )
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        // 1. Initially empty snapshot is emitted
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(totalCategoryCount = 0, visibleCategories = emptyList()))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(2, vm.uiState.value.channels.size) // unfiltered
+
+        // 2. Later, authoritative snapshot arrives
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(
+            totalCategoryCount = 2,
+            visibleCategories = listOf(createCategory("cat1", "Category 1"))
+        ))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.categoryVisibilityReady)
+        assertEquals(1, vm.uiState.value.channels.size)
+        assertEquals("chan1", vm.uiState.value.channels[0].id)
+    }
+
+    // 41. All categories deliberately hidden: authoritative with 0 visible categories produces 0 channels
+    @Test
+    fun testAllCategoriesDeliberatelyHidden() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            channelsEmissions = listOf(
+                listOf(createChannel("chan1", "Channel 1", "cat1"))
+            )
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        // Authoritative but 0 visible categories (all hidden)
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(totalCategoryCount = 2, visibleCategories = emptyList()))
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.categoryVisibilityReady)
+        assertTrue(vm.uiState.value.channels.isEmpty())
+    }
+
+    // 42. Initial empty snapshot does not clear an error
+    @Test
+    fun testInitialEmptySnapshotDoesNotClearError() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            categoriesError = RuntimeException("Load failed")
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_1"))
+        advanceUntilIdle()
+
+        // Verify there is a categoriesError
+        assertNotNull(vm.uiState.value.categoriesError)
+
+        // Emit non-authoritative snapshot
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(totalCategoryCount = 0, visibleCategories = emptyList()))
+        advanceUntilIdle()
+
+        // Error must NOT be cleared by a non-authoritative snapshot
+        assertNotNull(vm.uiState.value.categoriesError)
+
+        // Emit authoritative snapshot
+        fake.observeFlow.emit(LiveCategoryVisibilitySnapshot(totalCategoryCount = 1, visibleCategories = listOf(createCategory("cat1", "Category 1"))))
+        advanceUntilIdle()
+
+        // Now it should be cleared
+        assertNull(vm.uiState.value.categoriesError)
+    }
+
+    // 43. Provider change: old provider's authoritative snapshot cannot make the new provider ready
+    @Test
+    fun testOldProviderAuthoritativeSnapshotCannotMakeNewProviderReady() = runTest {
+        val fake = FakeLiveDataSource().apply {
+            // Setup authoritative snapshot for old provider, but with 1000ms delay
+            visibilitySnapshotsByProvider["prov_old"] = listOf(
+                LiveCategoryVisibilitySnapshot(totalCategoryCount = 1, visibleCategories = listOf(createCategory("cat1", "Category 1")))
+            )
+            observeDelayByProvider["prov_old"] = 1000L
+        }
+        val vm = LiveViewModel(fake)
+        vm.onProfileChanged(createEnabledProfile("prov_old"))
+        advanceTimeBy(500L) // prov_old is still waiting for delay to complete
+
+        // Switch to prov_new, which has no snapshot emissions and will be waiting on observeFlow
+        vm.onProfileChanged(createEnabledProfile("prov_new"))
+        advanceUntilIdle() // let the 1000ms delay of prov_old finish in the background
+
+        // The UI should NOT be ready because prov_old's delayed emission should be ignored
         assertFalse(vm.uiState.value.categoryVisibilityReady)
     }
 }

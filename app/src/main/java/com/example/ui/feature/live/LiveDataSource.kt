@@ -6,9 +6,9 @@ import kotlinx.coroutines.flow.Flow
 
 interface LiveDataSource {
 
-    fun observeVisibleCategories(
+    fun observeCategoryVisibility(
         providerId: String
-    ): Flow<List<Category>>
+    ): Flow<LiveCategoryVisibilitySnapshot>
 
     fun loadCategories(
         providerId: String

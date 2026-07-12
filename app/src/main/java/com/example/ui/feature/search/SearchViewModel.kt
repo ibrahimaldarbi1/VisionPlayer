@@ -200,7 +200,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
                     profile.features.moviesEnabled,
                     profile.features.seriesEnabled
                 ).collect { results ->
-                    if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId) {
+                    if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId && currentProfile?.features?.searchEnabled == true) {
                         val visibleLiveIds = input.liveCats.map { it.id }.toSet()
                         val visibleMovieIds = input.movieCats.map { it.id }.toSet()
                         val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
@@ -214,7 +214,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
                             it.copy(
                                 results = filteredResults,
                                 isLoading = false,
-                                error = null
+                                  error = null
                             )
                         }
                     }
@@ -222,7 +222,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId) {
+                if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId && currentProfile?.features?.searchEnabled == true) {
                     _uiState.update {
                         it.copy(
                             isLoading = false,
@@ -232,5 +232,15 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
                 }
             }
         }
+    }
+
+    fun retry() {
+        val input = SearchInput(
+            queryText = _query.value,
+            liveCats = liveCategories.value,
+            movieCats = movieCategories.value,
+            seriesCats = seriesCategories.value
+        )
+        performSearch(input)
     }
 }

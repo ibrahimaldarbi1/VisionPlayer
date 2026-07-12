@@ -113,31 +113,34 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
         _uiState.update { it.copy(isLoading = true, error = null) }
 
         loadMoviesJob = viewModelScope.launch {
+            val originalProviderId = profile.providerId
+            val originalCategoryId = _uiState.value.selectedCategoryId
             try {
-                repository.getCategories("MOVIE").first() // Seed cache
-                val categoryId = _uiState.value.selectedCategoryId
-                val originalProviderId = profile.providerId
-                val originalCategoryId = categoryId
-
-                repository.getMovies(categoryId).collect { moviesList ->
-                    if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId) {
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false,
-                                movies = moviesList,
-                                error = null
-                            )
+                repository.getCategories("MOVIE").collect {} // Seed cache fully without cancelling
+                
+                if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.moviesEnabled == true) {
+                    repository.getMovies(originalCategoryId).collect { moviesList ->
+                        if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.moviesEnabled == true) {
+                            _uiState.update {
+                                it.copy(
+                                    isLoading = false,
+                                    movies = moviesList,
+                                    error = null
+                                )
+                            }
                         }
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = e.message ?: "Failed to load movies"
-                    )
+                if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.moviesEnabled == true) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = e.message ?: "Failed to load movies"
+                        )
+                    }
                 }
             }
         }

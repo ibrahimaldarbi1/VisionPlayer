@@ -133,31 +133,34 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
         _uiState.update { it.copy(isLoading = true, error = null) }
         
         loadSeriesJob = viewModelScope.launch {
+            val originalProviderId = profile.providerId
+            val originalCategoryId = _uiState.value.selectedCategoryId
             try {
-                repository.getCategories("SERIES").first() // Seed cache
-                val categoryId = _uiState.value.selectedCategoryId
-                val originalProviderId = profile.providerId
-                val originalCategoryId = categoryId
-
-                repository.getSeries(categoryId).collect { seriesListResult ->
-                    if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId) {
-                        _uiState.update {
-                            it.copy(
-                                isLoading = false,
-                                seriesList = seriesListResult,
-                                error = null
-                            )
+                repository.getCategories("SERIES").collect {} // Seed cache fully without cancelling
+                
+                if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.seriesEnabled == true) {
+                    repository.getSeries(originalCategoryId).collect { seriesListResult ->
+                        if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.seriesEnabled == true) {
+                            _uiState.update {
+                                it.copy(
+                                    isLoading = false,
+                                    seriesList = seriesListResult,
+                                    error = null
+                                )
+                            }
                         }
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = e.message ?: "Failed to load series"
-                    )
+                if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId && currentProfile?.features?.seriesEnabled == true) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = e.message ?: "Failed to load series"
+                        )
+                    }
                 }
             }
         }
@@ -176,13 +179,15 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     private fun loadSeasons(series: Series) {
+        val profile = currentProfile ?: return
         _detailsUiState.update { it.copy(isLoadingSeasons = true, error = null) }
         loadSeasonsJob?.cancel()
         loadSeasonsJob = viewModelScope.launch {
+            val originalProviderId = profile.providerId
             try {
                 repository.getSeasons(series.id).collect { fetchedSeasons ->
                     val currentDetails = _detailsUiState.value
-                    if (currentDetails.activeSeries?.id == series.id) {
+                    if (currentProfile?.providerId == originalProviderId && currentProfile?.features?.seriesEnabled == true && currentDetails.activeSeries?.id == series.id) {
                         val previousSeason = currentDetails.selectedSeason
                         val newSelected = fetchedSeasons.find { it.id == previousSeason?.id } ?: fetchedSeasons.firstOrNull()
                         _detailsUiState.update {
@@ -200,7 +205,7 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (_detailsUiState.value.activeSeries?.id == series.id) {
+                if (currentProfile?.providerId == originalProviderId && currentProfile?.features?.seriesEnabled == true && _detailsUiState.value.activeSeries?.id == series.id) {
                     _detailsUiState.update {
                         it.copy(
                             isLoadingSeasons = false,
@@ -225,13 +230,15 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     private fun loadEpisodes(seriesId: String, season: Season) {
+        val profile = currentProfile ?: return
         _detailsUiState.update { it.copy(isLoadingEpisodes = true, error = null) }
         loadEpisodesJob?.cancel()
         loadEpisodesJob = viewModelScope.launch {
+            val originalProviderId = profile.providerId
             try {
                 repository.getEpisodes(seriesId, season.id).collect { fetchedEpisodes ->
                     val currentDetails = _detailsUiState.value
-                    if (currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
+                    if (currentProfile?.providerId == originalProviderId && currentProfile?.features?.seriesEnabled == true && currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
                         _detailsUiState.update {
                             it.copy(
                                 episodes = fetchedEpisodes,
@@ -244,7 +251,7 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
                 throw e
             } catch (e: Exception) {
                 val currentDetails = _detailsUiState.value
-                if (currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
+                if (currentProfile?.providerId == originalProviderId && currentProfile?.features?.seriesEnabled == true && currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
                     _detailsUiState.update {
                         it.copy(
                             isLoadingEpisodes = false,

@@ -428,10 +428,12 @@ fun HomeScreen(
                             favoritesError = liveState.favoritesError,
                             onToggleFavorite = liveViewModel::toggleFavorite,
                             onDismissFavoritesError = liveViewModel::dismissFavoritesError,
-                            onStartMultiViewSetup = {
-                                multiViewViewModel.setPendingChannels(emptyList()) // start fresh
-                                multiViewViewModel.showSetup(true)
-                            },
+                            onStartMultiViewSetup = if (multiViewEnabled) {
+                                {
+                                    multiViewViewModel.setPendingChannels(emptyList()) // start fresh
+                                    multiViewViewModel.showSetup(true)
+                                }
+                            } else null,
                             initialLoading = liveState.initialLoading,
                             refreshing = liveState.refreshing,
                             channelsError = liveState.channelsError,
@@ -466,7 +468,10 @@ fun HomeScreen(
                             isTv = isTv,
                             profile = profile,
                             favorites = moviesState.favorites,
-                            onToggleFavorite = moviesViewModel::toggleFavorite
+                            onToggleFavorite = moviesViewModel::toggleFavorite,
+                            isLoading = moviesState.isLoading,
+                            error = moviesState.error,
+                            onRetry = moviesViewModel::loadMovies
                         )
                     }
                     AppDestination.SERIES -> if (profile.features.seriesEnabled) {
@@ -479,7 +484,10 @@ fun HomeScreen(
                             isTv = isTv,
                             profile = profile,
                             favorites = seriesState.favorites,
-                            onToggleFavorite = seriesViewModel::toggleFavorite
+                            onToggleFavorite = seriesViewModel::toggleFavorite,
+                            isLoading = seriesState.isLoading,
+                            error = seriesState.error,
+                            onRetry = seriesViewModel::loadSeries
                         )
                     }
                     AppDestination.EPG -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
@@ -517,7 +525,8 @@ fun HomeScreen(
                             favorites = searchState.favorites,
                             onToggleFavorite = searchViewModel::toggleFavorite,
                             isLoading = searchState.isLoading,
-                            error = searchState.error
+                            error = searchState.error,
+                            onRetry = searchViewModel::retry
                         )
                     }
                     AppDestination.SETTINGS -> SettingsView(
@@ -537,7 +546,8 @@ fun HomeScreen(
                         onLogout = onLogout,
                         isTv = isTv,
                         selectedFootballCompetitionCount = footballState.selectedCompetitionKeys.size,
-                        onConfigureFootball = footballViewModel::openSettingsDialog
+                        onConfigureFootball = footballViewModel::openSettingsDialog,
+                        onDismissCategoryError = settingsViewModel::clearCategoryError
                     )
                 }
             }

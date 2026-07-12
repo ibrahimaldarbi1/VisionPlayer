@@ -31,7 +31,8 @@ fun SearchPanel(
     favorites: List<FavoriteEntity> = emptyList(),
     onToggleFavorite: (FavoriteEntity) -> Unit = {},
     isLoading: Boolean = false,
-    error: String? = null
+    error: String? = null,
+    onRetry: () -> Unit = {}
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -59,8 +60,25 @@ fun SearchPanel(
                 CircularProgressIndicator(color = Color(profile.branding.primaryColor))
             }
         } else if (error != null && results.liveChannels.isEmpty() && results.movies.isEmpty() && results.series.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(text = error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(profile.branding.primaryColor)
+                    )
+                ) {
+                    Text("Retry", color = Color.White)
+                }
             }
         } else if (results.liveChannels.isEmpty() && results.movies.isEmpty() && results.series.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

@@ -42,7 +42,8 @@ fun SettingsView(
     onLogout: () -> Unit,
     isTv: Boolean,
     selectedFootballCompetitionCount: Int,
-    onConfigureFootball: () -> Unit = {}
+    onConfigureFootball: () -> Unit = {},
+    onDismissCategoryError: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE) }
@@ -67,7 +68,8 @@ fun SettingsView(
             onSetCategoryHidden = onSetCategoryHidden,
             onResetCategoryCustomization = onResetCategoryCustomization,
             isTv = isTv,
-            onBack = { onSetSubScreen(null) }
+            onBack = { onSetSubScreen(null) },
+            onDismissCategoryError = onDismissCategoryError
         )
     } else {
         if (com.example.BuildConfig.DEBUG && uiState.showProfileDialog) {
@@ -435,7 +437,8 @@ fun CategoryManagementView(
     onSetCategoryHidden: (String, Boolean) -> Unit,
     onResetCategoryCustomization: () -> Unit,
     isTv: Boolean,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onDismissCategoryError: () -> Unit
 ) {
     // Determine enabled tabs
     val tabs = remember(profile) {
@@ -479,6 +482,38 @@ fun CategoryManagementView(
             }
         }
 
+        uiState.categoryError?.let { err ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp)
+                    .testTag("category_error_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = err,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(
+                        onClick = onDismissCategoryError,
+                        modifier = Modifier.size(24.dp).testTag("dismiss_category_error_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss Error",
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        }
+
         if (tabs.size > 1) {
             ScrollableTabRow(
                 selectedTabIndex = tabs.indexOf(selectedTab).coerceAtLeast(0),
@@ -517,10 +552,20 @@ fun CategoryManagementView(
                 CircularProgressIndicator(color = Color(profile.branding.primaryColor))
             }
         } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
+            Column(modifier = Modifier.weight(1f)) {
+                if (uiState.isCategoryOperating) {
+                    LinearProgressIndicator(
+                        color = Color(profile.branding.primaryColor),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("category_operation_progress")
+                    )
+                }
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
                 items(categories.size, key = { categories[it].id }) { index ->
                     val item = categories[index]
                     var isFocused by remember { mutableStateOf(false) }
@@ -634,6 +679,7 @@ fun CategoryManagementView(
                         }
                     }
                 }
+            }
             }
         }
     }

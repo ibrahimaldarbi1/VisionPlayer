@@ -65,11 +65,14 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         val oldProfile = currentProfile
         currentProfile = profile
         
-        if (oldProfile?.providerId != profile.providerId) {
-            loadHomeData(profile.providerId)
-            _unavailableTmdbItem.value = null
+        if (oldProfile != profile) {
             matchingJob?.cancel()
             matchingJob = null
+            _unavailableTmdbItem.value = null
+        }
+        
+        if (oldProfile?.providerId != profile.providerId) {
+            loadHomeData(profile.providerId)
         }
 
         // Handle Favorites subscription
@@ -171,7 +174,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
                     if (!clickedProfile.features.seriesEnabled || currentProfile?.features?.seriesEnabled != true) return@launch
                     val matched = repository.findMatchingSeries(itemTitle)
                     
-                    if (currentProfile?.providerId == clickedProfile.providerId && currentProfile?.features?.seriesEnabled == true) {
+                    if (currentProfile == clickedProfile && currentProfile?.features?.seriesEnabled == true) {
                         val decision = TmdbClickDecisionProcessor.processClick(item, null, matched)
                         when (decision) {
                             is TmdbClickDecisionProcessor.TmdbClickResult.OpenSeries -> {
@@ -187,7 +190,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
                     if (!clickedProfile.features.moviesEnabled || currentProfile?.features?.moviesEnabled != true) return@launch
                     val matched = repository.findMatchingMovie(itemTitle)
                     
-                    if (currentProfile?.providerId == clickedProfile.providerId && currentProfile?.features?.moviesEnabled == true) {
+                    if (currentProfile == clickedProfile && currentProfile?.features?.moviesEnabled == true) {
                         val decision = TmdbClickDecisionProcessor.processClick(item, matched, null)
                         when (decision) {
                             is TmdbClickDecisionProcessor.TmdbClickResult.PlayMovie -> {

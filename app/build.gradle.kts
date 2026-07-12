@@ -49,7 +49,6 @@ android {
       buildConfigField("Boolean", "DEBUG_DEMO_MODE_ENABLED", "false")
     }
     debug {
-      signingConfig = signingConfigs.getByName("debugConfig")
       buildConfigField("Boolean", "DEBUG_DEMO_MODE_ENABLED", "true")
     }
   }

@@ -236,22 +236,75 @@ fun HomeScreen(
         )
     }
 
-    // Multi-view states
-    var activeMultiViewChannels by remember { mutableStateOf<List<LiveChannel>?>(null) }
-    var showMultiViewSetup by remember { mutableStateOf(false) }
-    var pendingMultiViewChannels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
+    // Movies ViewModel
+    val moviesViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.movies.MoviesViewModel(repository)
+        }
+    }
+    val moviesViewModel: com.example.ui.feature.movies.MoviesViewModel = viewModel(factory = moviesViewModelFactory)
+    val moviesState by moviesViewModel.uiState.collectAsStateWithLifecycle()
 
-    var moviesList by remember { mutableStateOf<List<Movie>>(emptyList()) }
-    var seriesList by remember { mutableStateOf<List<Series>>(emptyList()) }
-    var categoriesMovie by remember { mutableStateOf<List<Category>>(emptyList()) }
-    var categoriesSeries by remember { mutableStateOf<List<Category>>(emptyList()) }
+    LaunchedEffect(profile) {
+        moviesViewModel.onProfileChanged(profile)
+    }
 
-    var selectedCategoryMovie by remember { mutableStateOf<String?>(null) }
-    var selectedCategorySeries by remember { mutableStateOf<String?>(null) }
+    // Series ViewModel
+    val seriesViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.series.SeriesViewModel(repository)
+        }
+    }
+    val seriesViewModel: com.example.ui.feature.series.SeriesViewModel = viewModel(factory = seriesViewModelFactory)
+    val seriesState by seriesViewModel.uiState.collectAsStateWithLifecycle()
 
-    // Loading & search flows
-    var searchQuery by remember { mutableStateOf("") }
-    var searchResult by remember { mutableStateOf(SearchResults()) }
+    LaunchedEffect(profile) {
+        seriesViewModel.onProfileChanged(profile)
+    }
+
+    // Search ViewModel
+    val searchViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.search.SearchViewModel(repository)
+        }
+    }
+    val searchViewModel: com.example.ui.feature.search.SearchViewModel = viewModel(factory = searchViewModelFactory)
+    val searchState by searchViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(profile) {
+        searchViewModel.onProfileChanged(profile)
+    }
+
+    // Settings ViewModel
+    val settingsViewModelFactory = remember(repository) {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.settings.SettingsViewModel(repository)
+        }
+    }
+    val settingsViewModel: com.example.ui.feature.settings.SettingsViewModel = viewModel(factory = settingsViewModelFactory)
+    val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(onProfileSelected) {
+        settingsViewModel.initCallbacks(onProfileSelected)
+    }
+
+    // Multi-view ViewModel
+    val multiViewViewModelFactory = remember {
+        com.example.core.viewmodel.AppViewModelFactory {
+            com.example.ui.feature.multiview.MultiViewViewModel()
+        }
+    }
+    val multiViewViewModel: com.example.ui.feature.multiview.MultiViewViewModel = viewModel(factory = multiViewViewModelFactory)
+    val multiViewState by multiViewViewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(profile) {
+        multiViewViewModel.onProfileChanged(profile)
+    }
+
+    val activeMultiViewChannels = multiViewState.activeMultiViewChannels
+    val showMultiViewSetup = multiViewState.showMultiViewSetup
+    val pendingMultiViewChannels = multiViewState.pendingMultiViewChannels
+
     var activeSeriesDetail by remember { mutableStateOf<Series?>(null) }
     var unavailableTmdbItem by remember { mutableStateOf<HomeItem?>(null) }
 
@@ -260,102 +313,38 @@ fun HomeScreen(
     LaunchedEffect(profile.id, profile.providerId, profile.features) {
         navigationState.onFeaturesChanged(profile.features)
         
-        if (!multiViewEnabled) {
-            showMultiViewSetup = false
-            activeMultiViewChannels = null
-            pendingMultiViewChannels = emptyList()
-        }
         if (!profile.features.seriesEnabled) {
             activeSeriesDetail = null
         }
         if (!profile.features.moviesEnabled && !profile.features.seriesEnabled) {
             unavailableTmdbItem = null
         }
-        if (!profile.features.searchEnabled) {
-            searchQuery = ""
-            searchResult = SearchResults()
-        }
     }
-
 
     LaunchedEffect(addToMultiViewChannel, multiViewEnabled) {
         addToMultiViewChannel?.let { channel ->
             if (multiViewEnabled) {
-                if (pendingMultiViewChannels.none { it.id == channel.id }) {
-                    pendingMultiViewChannels = pendingMultiViewChannels + channel
-                }
-                showMultiViewSetup = true
+                multiViewViewModel.addToPending(channel)
             }
             onAddToMultiViewHandled()
         }
     }
 
-
-    // Initialize content flows
-    LaunchedEffect(
-        profile,
-        selectedCategoryMovie,
-        selectedCategorySeries
-    ) {
-        if (profile.features.moviesEnabled) {
-            repository.getCategories("MOVIE").first() // Seed cache
-            moviesList = repository.getMovies(selectedCategoryMovie).first()
-        }
-        if (profile.features.seriesEnabled) {
-            repository.getCategories("SERIES").first() // Seed cache
-            seriesList = repository.getSeries(selectedCategorySeries).first()
-        }
+    val displayMovies = remember(moviesState.movies, moviesState.categories) {
+        val visibleIds = moviesState.categories.map { it.id }.toSet()
+        moviesState.movies.filter { it.categoryId in visibleIds }
     }
-
-    LaunchedEffect(repository) {
-        repository.observeVisibleCategories("MOVIE").collect { categoriesMovie = it }
-    }
-    LaunchedEffect(repository) {
-        repository.observeVisibleCategories("SERIES").collect { categoriesSeries = it }
-    }
-
-    val displayMovies = remember(moviesList, categoriesMovie) {
-        val visibleIds = categoriesMovie.map { it.id }.toSet()
-        moviesList.filter { it.categoryId in visibleIds }
-    }
-    val displaySeries = remember(seriesList, categoriesSeries) {
-        val visibleIds = categoriesSeries.map { it.id }.toSet()
-        seriesList.filter { it.categoryId in visibleIds }
-    }
-
-    // Live search executor
-    LaunchedEffect(searchQuery, navigationState.activeDestination, liveState.categories, categoriesMovie, categoriesSeries) {
-        if (!profile.features.searchEnabled || searchQuery.isBlank()) {
-            searchResult = SearchResults()
-            return@LaunchedEffect
-        }
-        if (searchQuery.isNotEmpty()) {
-            repository.searchContent(
-                searchQuery,
-                profile.features.liveTvEnabled,
-                profile.features.moviesEnabled,
-                profile.features.seriesEnabled
-            ).collect { results ->
-                val visibleLiveIds = liveState.categories.map { it.id }.toSet()
-                val visibleMovieIds = categoriesMovie.map { it.id }.toSet()
-                val visibleSeriesIds = categoriesSeries.map { it.id }.toSet()
-                searchResult = results.copy(
-                    liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
-                    movies = results.movies.filter { it.categoryId in visibleMovieIds },
-                    series = results.series.filter { it.categoryId in visibleSeriesIds }
-                )
-            }
-        } else {
-            searchResult = SearchResults()
-        }
+    val displaySeries = remember(seriesState.seriesList, seriesState.categories) {
+        val visibleIds = seriesState.categories.map { it.id }.toSet()
+        seriesState.seriesList.filter { it.categoryId in visibleIds }
     }
 
     // Fullscreen Overlay Layers for Multi-view
     if (multiViewEnabled && activeMultiViewChannels != null) {
         MultiViewPlayerScreen(
-            channels = activeMultiViewChannels!!,
+            channels = activeMultiViewChannels,
             allChannels = liveState.channels,
-            onBack = { activeMultiViewChannels = null },
+            onBack = { multiViewViewModel.updateActiveChannels(null) },
             profile = profile
         )
     } else if (multiViewEnabled && showMultiViewSetup) {
@@ -365,11 +354,10 @@ fun HomeScreen(
             pendingMultiViewChannels = pendingMultiViewChannels,
             profile = profile,
             onLaunch = { selected ->
-                activeMultiViewChannels = selected
-                showMultiViewSetup = false
+                multiViewViewModel.launchMultiView(selected)
             },
             onCancel = {
-                showMultiViewSetup = false
+                multiViewViewModel.showSetup(false)
             }
         )
     } else {        // Layout Scaffold
@@ -409,10 +397,7 @@ fun HomeScreen(
                         showFootballScheduleOnHome = footballState.showOnHome,
                         onAddToMultiView = if (multiViewEnabled) {
                                     { channel ->
-                                        if (pendingMultiViewChannels.none { it.id == channel.id }) {
-                                            pendingMultiViewChannels = pendingMultiViewChannels + channel
-                                        }
-                                        showMultiViewSetup = true
+                                        multiViewViewModel.addToPending(channel)
                                     }
                                 } else null,
                         onTmdbItemClick = { item ->
@@ -487,8 +472,8 @@ fun HomeScreen(
                             onToggleFavorite = liveViewModel::toggleFavorite,
                             onDismissFavoritesError = liveViewModel::dismissFavoritesError,
                             onStartMultiViewSetup = {
-                                pendingMultiViewChannels = emptyList() // start fresh
-                                showMultiViewSetup = true
+                                multiViewViewModel.setPendingChannels(emptyList()) // start fresh
+                                multiViewViewModel.showSetup(true)
                             },
                             initialLoading = liveState.initialLoading,
                             refreshing = liveState.refreshing,
@@ -517,29 +502,29 @@ fun HomeScreen(
                     AppDestination.MOVIES -> if (profile.features.moviesEnabled) {
                         MoviesLibraryView(
                             movies = displayMovies,
-                            categories = categoriesMovie,
-                            selectedCategory = selectedCategoryMovie,
-                            onCategorySelected = { selectedCategoryMovie = it },
+                            categories = moviesState.categories,
+                            selectedCategory = moviesState.selectedCategoryId,
+                            onCategorySelected = moviesViewModel::selectCategory,
                             onPlayMovie = onPlayMovie,
                             repository = repository,
                             isTv = isTv,
                             profile = profile,
-                            favorites = favorites,
-                            onToggleFavorite = toggleFavorite
+                            favorites = moviesState.favorites,
+                            onToggleFavorite = moviesViewModel::toggleFavorite
                         )
                     }
                     AppDestination.SERIES -> if (profile.features.seriesEnabled) {
                         SeriesLibraryView(
                             seriesList = displaySeries,
-                            categories = categoriesSeries,
-                            selectedCategory = selectedCategorySeries,
-                            onCategorySelected = { selectedCategorySeries = it },
+                            categories = seriesState.categories,
+                            selectedCategory = seriesState.selectedCategoryId,
+                            onCategorySelected = seriesViewModel::selectCategory,
                             onSeriesClick = { activeSeriesDetail = it },
                             repository = repository,
                             isTv = isTv,
                             profile = profile,
-                            favorites = favorites,
-                            onToggleFavorite = toggleFavorite
+                            favorites = seriesState.favorites,
+                            onToggleFavorite = seriesViewModel::toggleFavorite
                         )
                     }
                     AppDestination.EPG -> if (profile.features.epgEnabled && profile.features.liveTvEnabled) {
@@ -566,28 +551,28 @@ fun HomeScreen(
                     }
                     AppDestination.SEARCH -> if (profile.features.searchEnabled) {
                         SearchPanel(
-                            query = searchQuery,
-                            onQueryChanged = { searchQuery = it },
-                            results = searchResult,
+                            query = searchState.query,
+                            onQueryChanged = searchViewModel::onQueryChanged,
+                            results = searchState.results,
                             onPlayLive = onPlayLive,
                             onPlayMovie = onPlayMovie,
                             onSeriesClick = { activeSeriesDetail = it },
                             isTv = isTv,
                             profile = profile,
-                            favorites = favorites,
-                            onToggleFavorite = toggleFavorite
+                            favorites = searchState.favorites,
+                            onToggleFavorite = searchViewModel::toggleFavorite
                         )
                     }
                     AppDestination.SETTINGS -> SettingsView(
                         profile = profile,
-                        onProfileSelected = onProfileSelected,
+                        onProfileSelected = settingsViewModel::selectProfile,
                         repository = repository,
                         onNavigateToSupport = onNavigateToSupport,
                         onNavigateToParental = onNavigateToParental,
                         onLogout = onLogout,
                         isTv = isTv,
                         selectedFootballCompetitionCount = footballState.selectedCompetitionKeys.size,
-                        onConfigureFootball = { footballViewModel.openSettingsDialog() }
+                        onConfigureFootball = footballViewModel::openSettingsDialog
                     )
                 }
             }

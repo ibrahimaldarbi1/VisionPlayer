@@ -95,9 +95,6 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable("home") {
-                            // Re-trigger configuration profiles check
-                            appProfileState = ProviderConfigRegistry.currentProfile
-
                             HomeScreen(
                                     profile = appProfileState,
                                     onProfileSelected = {

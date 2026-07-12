@@ -235,22 +235,14 @@ fun SupportScreen(
                             body = diagnosticReport
                         )
                         
-                        val resolveOk = emailIntent.resolveActivity(context.packageManager) != null
-                        if (resolveOk) {
+                        if (emailIntent.resolveActivity(context.packageManager) != null) {
                             try {
                                 context.startActivity(emailIntent)
-                                onSendIntent(emailIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Failed to open email app.", Toast.LENGTH_LONG).show()
                             }
                         } else {
-                            // Secondary direct execution in case queries limit visibility on Android 11+
-                            try {
-                                context.startActivity(emailIntent)
-                                onSendIntent(emailIntent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "No email app found. Please copy report and contact manually.", Toast.LENGTH_LONG).show()
-                            }
+                            Toast.makeText(context, "No email app found. Please copy report and contact manually.", Toast.LENGTH_LONG).show()
                         }
                     },
                     enabled = ticketDetails.isNotBlank() && isEmailValid,
@@ -280,21 +272,14 @@ fun SupportScreen(
                         val telegramUrl = ContactIntentBuilder.buildTelegramUrl(normalizedTelegram)
                         val telegramIntent = Intent(Intent.ACTION_VIEW, Uri.parse(telegramUrl))
                         
-                        val resolveOk = telegramIntent.resolveActivity(context.packageManager) != null
-                        if (resolveOk) {
+                        if (telegramIntent.resolveActivity(context.packageManager) != null) {
                             try {
                                 context.startActivity(telegramIntent)
-                                onSendIntent(telegramIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Failed to open Telegram.", Toast.LENGTH_SHORT).show()
                             }
                         } else {
-                            try {
-                                context.startActivity(telegramIntent)
-                                onSendIntent(telegramIntent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "No browser or Telegram app found.", Toast.LENGTH_SHORT).show()
-                            }
+                            Toast.makeText(context, "No browser or Telegram app found.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     enabled = ticketDetails.isNotBlank() && normalizedTelegram != null,
@@ -320,21 +305,14 @@ fun SupportScreen(
                         val whatsappUrl = ContactIntentBuilder.buildWhatsAppUrl(normalizedWhatsapp, diagnosticReport)
                         val whatsappIntent = Intent(Intent.ACTION_VIEW, Uri.parse(whatsappUrl))
                         
-                        val resolveOk = whatsappIntent.resolveActivity(context.packageManager) != null
-                        if (resolveOk) {
+                        if (whatsappIntent.resolveActivity(context.packageManager) != null) {
                             try {
                                 context.startActivity(whatsappIntent)
-                                onSendIntent(whatsappIntent)
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Failed to open WhatsApp.", Toast.LENGTH_SHORT).show()
                             }
                         } else {
-                            try {
-                                context.startActivity(whatsappIntent)
-                                onSendIntent(whatsappIntent)
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "No browser or WhatsApp app found.", Toast.LENGTH_SHORT).show()
-                            }
+                            Toast.makeText(context, "No browser or WhatsApp app found.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     enabled = ticketDetails.isNotBlank() && normalizedWhatsapp != null,

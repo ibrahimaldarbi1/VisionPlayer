@@ -29,11 +29,4 @@ object DemoPolicy {
         
         return isExactDemoUser && isExactDemoUrl && isExactDemoToken
     }
-
-    /**
-     * Backwards-compatible overload. Assumes the standard "demo_pass" password.
-     */
-    fun isDemoSession(username: String?, serverUrl: String?): Boolean {
-        return isDemoSession(username, "demo_pass", serverUrl)
-    }
 }

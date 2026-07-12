@@ -41,6 +41,10 @@ object DiagnosticReportBuilder {
         val sanitizedSubject = SensitiveDataRedactor.redactExceptionMessage(subject)
         val sanitizedDescription = SensitiveDataRedactor.redactExceptionMessage(description)
         
+        val sanitizedCategory = errorCategory?.let { cat ->
+            cat.replace(Regex("[^A-Za-z0-9_]"), "_").uppercase(Locale.US).take(32)
+        }
+
         val sb = java.lang.StringBuilder()
         sb.append("=== SUPPORT DIAGNOSTIC REPORT ===\n")
         sb.append("Date/Time: $timestamp\n")
@@ -52,8 +56,8 @@ object DiagnosticReportBuilder {
         sb.append("Android OS: $androidVersion\n")
         sb.append("Classification: $classification\n")
         sb.append("Active Account Host: $redactedHost\n")
-        if (errorCategory != null) {
-            sb.append("Error Category: $errorCategory\n")
+        if (sanitizedCategory != null) {
+            sb.append("Error Category: $sanitizedCategory\n")
         }
         sb.append("---------------------------------\n")
         sb.append("Subject: $sanitizedSubject\n")

@@ -198,7 +198,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (supportEnabled) {
-                                val supportViewModel = remember(repository) { SupportViewModel(repository) }
+                                val supportViewModel: com.example.ui.screens.SupportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+                                    factory = com.example.core.viewmodel.AppViewModelFactory {
+                                        com.example.ui.screens.SupportViewModel(repository)
+                                    }
+                                )
                                 SupportScreen(
                                     profile = appProfileState,
                                     viewModel = supportViewModel,
@@ -280,6 +284,8 @@ class MainActivity : ComponentActivity() {
                                         } else {
                                             try {
                                                 repository.getLiveChannels(null).first()
+                                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                                throw e
                                             } catch (e: Exception) {
                                                 emptyList()
                                             }
@@ -307,6 +313,8 @@ class MainActivity : ComponentActivity() {
                                          } else {
                                              try {
                                                  repository.getLiveChannels(null).first()
+                                             } catch (e: kotlinx.coroutines.CancellationException) {
+                                                 throw e
                                              } catch (e: Exception) {
                                                  emptyList()
                                              }
@@ -325,10 +333,12 @@ class MainActivity : ComponentActivity() {
                                          }
                                      }
                                  },
-                                onReportProblem = {
-                                    activePlaybackItem = null
-                                    navController.navigate("support")
-                                }
+                                onReportProblem = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                    {
+                                        activePlaybackItem = null
+                                        navController.navigate("support")
+                                    }
+                                } else null
                             )
                         }
                     }

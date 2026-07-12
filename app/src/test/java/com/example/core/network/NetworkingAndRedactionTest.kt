@@ -1,6 +1,7 @@
 package com.example.core.network
 
 import com.example.core.redaction.SensitiveDataRedactor
+import com.example.data.XmltvEpgParser
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -23,7 +24,6 @@ class NetworkingAndRedactionTest {
     fun testRedactingQueryCredentials() {
         val url = "http://myprovider.com/player_api.php?username=myuser&password=mypassword&action=get_live_streams"
         val redactedUrl = SensitiveDataRedactor.redactUrl(url)
-        // Redacted URL must keep only scheme and host, removing credentials, query, path, and userInfo
         assertEquals("http://myprovider.com", redactedUrl)
 
         val exceptionMsg = "Failed to connect to http://myprovider.com/player_api.php?username=myuser&password=mypassword"
@@ -61,21 +61,39 @@ class NetworkingAndRedactionTest {
         assertFalse(redactedMsg.contains("xmltv.php"))
     }
 
+    @Test
+    fun testRelativeApiRejection() {
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("player_api.php"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("xmltv.php"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("player_api.php?username=1"))
+    }
+
+    @Test
+    fun testMalformedInputRejection() {
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("http://my host.com"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("some spaces here"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("user:pass@host/path"))
+    }
+
+    @Test
+    fun testPreserveIpv4Ipv6AndDns() {
+        assertEquals("192.168.1.100:8080", SensitiveDataRedactor.redactUrl("192.168.1.100:8080"))
+        assertEquals("[2001:db8::1]:9000", SensitiveDataRedactor.redactUrl("[2001:db8::1]:9000"))
+        assertEquals("myprovider.com", SensitiveDataRedactor.redactUrl("myprovider.com"))
+    }
+
     // --- Error Mapping Tests ---
 
     @Test
     fun testMappingTimeoutUnauthorizedServerAndConnectivityFailures() {
-        // Connectivity mapping
         val connEx = UnknownHostException("unable to resolve host")
         val mappedConn = mapThrowableToNetworkError(connEx)
         assertTrue(mappedConn is NetworkError.NoConnection)
 
-        // Timeout mapping
         val timeoutEx = SocketTimeoutException("connect timed out")
         val mappedTimeout = mapThrowableToNetworkError(timeoutEx)
         assertTrue(mappedTimeout is NetworkError.Timeout)
 
-        // Status code mapping
         val unauthorizedError = mapResponseCodeToNetworkError(401)
         assertTrue(unauthorizedError is NetworkError.Unauthorized)
 
@@ -84,6 +102,13 @@ class NetworkingAndRedactionTest {
         
         val unsupportedError = mapResponseCodeToNetworkError(501)
         assertTrue(unsupportedError is NetworkError.Unsupported)
+    }
+
+    @Test
+    fun testUnknownSafety() {
+        val mapped = mapThrowableToNetworkError(RuntimeException("leaked DB password credentials"))
+        assertTrue(mapped is NetworkError.Unknown)
+        assertEquals("An unexpected network error occurred.", (mapped as NetworkError.Unknown).message)
     }
 
     // --- Retry Behavior Tests ---
@@ -100,7 +125,34 @@ class NetworkingAndRedactionTest {
         } catch (e: NetworkError.Unauthorized) {
             // Success
         }
-        assertEquals(1, attempts) // Should not retry on Unauthorized
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun testRetryRefusalForTerminalErrorsAndCancellation() = runTest {
+        var attempts = 0
+        try {
+            NetworkRetryPolicy.retryWithBackoff(maxAttempts = 3) {
+                attempts++
+                throw NetworkError.InvalidResponse
+            }
+            fail("Expected InvalidResponse")
+        } catch (e: NetworkError.InvalidResponse) {
+            // Success
+        }
+        assertEquals(1, attempts)
+
+        attempts = 0
+        try {
+            NetworkRetryPolicy.retryWithBackoff(maxAttempts = 3) {
+                attempts++
+                throw kotlinx.coroutines.CancellationException("Cancelled")
+            }
+            fail("Expected CancellationException")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Success
+        }
+        assertEquals(1, attempts)
     }
 
     @Test
@@ -115,6 +167,26 @@ class NetworkingAndRedactionTest {
         } catch (e: SocketTimeoutException) {
             // Success
         }
-        assertEquals(3, attempts) // Should attempt exactly 3 times (bounded)
+        assertEquals(3, attempts)
+    }
+
+    // --- XMLTV Parsing / Streaming ---
+
+    @Test
+    fun testXmltvStreamingAndParsing() {
+        val fakeXml = """
+            <tv>
+                <programme start="20260712080000 +0000" stop="20260712090000 +0000" channel="chan1">
+                    <title>Live Football Match</title>
+                    <desc>Premium Live Match Coverage</desc>
+                </programme>
+            </tv>
+        """.trimIndent()
+        
+        val programs = XmltvEpgParser.parseXmltv(fakeXml)
+        assertEquals(1, programs.size)
+        assertEquals("chan1", programs[0].channelId)
+        assertEquals("Live Football Match", programs[0].title)
+        assertEquals("Premium Live Match Coverage", programs[0].description)
     }
 }

@@ -28,6 +28,14 @@ class AppContainer(
         NetworkClientFactory.sharedClient
     }
 
+    val footballHttpClient by lazy {
+        NetworkClientFactory.footballClient
+    }
+
+    val xmltvHttpClient by lazy {
+        NetworkClientFactory.xmltvClient
+    }
+
     val xtreamApiClient by lazy {
         XtreamApiClient(
             client = sharedHttpClient

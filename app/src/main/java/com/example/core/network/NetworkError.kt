@@ -19,8 +19,8 @@ sealed class NetworkError : Exception() {
     object Unsupported : NetworkError() {
         override val message: String = "The requested action is not supported by your provider."
     }
-    data class Unknown(val error: Throwable) : NetworkError() {
-        override val message: String = error.localizedMessage ?: "An unexpected network error occurred."
+    object Unknown : NetworkError() {
+        override val message: String = "An unexpected network error occurred."
     }
 }
 
@@ -28,6 +28,11 @@ fun mapThrowableToNetworkError(throwable: Throwable): NetworkError {
     if (throwable is NetworkError) return throwable
     if (throwable is kotlinx.coroutines.CancellationException) {
         throw throwable
+    }
+    
+    if (throwable is retrofit2.HttpException) {
+        val error = mapResponseCodeToNetworkError(throwable.code())
+        if (error != null) return error
     }
     
     val msg = throwable.message ?: ""
@@ -52,15 +57,18 @@ fun mapThrowableToNetworkError(throwable: Throwable): NetworkError {
         return NetworkError.Timeout
     }
     
-    return NetworkError.Unknown(throwable)
+    return NetworkError.Unknown
 }
 
 fun mapResponseCodeToNetworkError(code: Int): NetworkError? {
     return when (code) {
-        200 -> null
+        in 200..299 -> null
         401, 403 -> NetworkError.Unauthorized
+        408, 504 -> NetworkError.Timeout
         405, 501 -> NetworkError.Unsupported
+        in 400..499 -> NetworkError.InvalidResponse
         in 500..599 -> NetworkError.ServerError
         else -> NetworkError.ServerError
     }
 }
+

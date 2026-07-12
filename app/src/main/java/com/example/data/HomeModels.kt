@@ -47,6 +47,18 @@ class HomeApiClient(private val baseUrl: String) {
     val service: HomeApiService = com.example.core.network.BackendApiFactory.getHomeApiService(baseUrl)
 
     suspend fun getHome(providerId: String): HomeResponse {
-        return service.getHome(providerId)
+        return try {
+            com.example.core.network.NetworkRetryPolicy.retryWithBackoff {
+                try {
+                    service.getHome(providerId)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    throw com.example.core.network.mapThrowableToNetworkError(e)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw if (e is com.example.core.network.NetworkError) e else com.example.core.network.mapThrowableToNetworkError(e)
+        }
     }
 }

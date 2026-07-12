@@ -42,8 +42,22 @@ class XtreamApiClient(private val client: OkHttpClient) {
                 val request = Request.Builder()
                     .url(urlString)
                     .build()
+                val call = client.newCall(request)
                 val response = try {
-                    client.newCall(request).execute()
+                    kotlinx.coroutines.suspendCancellableCoroutine<okhttp3.Response> { cont ->
+                        cont.invokeOnCancellation {
+                            call.cancel()
+                        }
+                        call.enqueue(object : okhttp3.Callback {
+                            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                                cont.resumeWith(Result.failure(e))
+                            }
+
+                            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                                cont.resumeWith(Result.success(response))
+                            }
+                        })
+                    }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     throw mapThrowableToNetworkError(e)
@@ -63,14 +77,19 @@ class XtreamApiClient(private val client: OkHttpClient) {
                 throw e
             }
             val redactedUrl = SensitiveDataRedactor.redactUrl(urlString)
-            val redactedMsg = SensitiveDataRedactor.redactExceptionMessage(e.message)
-            android.util.Log.e("XtreamApiClient", "Request failed for $redactedUrl: $redactedMsg")
-            
-            if (e is NetworkError) {
-                throw e
-            } else {
-                throw NetworkError.Unknown(e)
+            val error = if (e is NetworkError) e else mapThrowableToNetworkError(e)
+            val category = when (error) {
+                is NetworkError.NoConnection -> "NoConnection"
+                is NetworkError.Timeout -> "Timeout"
+                is NetworkError.Unauthorized -> "Unauthorized"
+                is NetworkError.ServerError -> "ServerError"
+                is NetworkError.InvalidResponse -> "InvalidResponse"
+                is NetworkError.Unsupported -> "Unsupported"
+                else -> "Unknown"
             }
+            android.util.Log.e("XtreamApiClient", "Request failed for $redactedUrl with category: $category")
+            
+            throw error
         }
     }
 

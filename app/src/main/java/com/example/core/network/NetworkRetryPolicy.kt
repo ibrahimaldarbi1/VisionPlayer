@@ -13,7 +13,7 @@ object NetworkRetryPolicy {
                 false
             } else {
                 val error = mapThrowableToNetworkError(e)
-                error !is NetworkError.Unauthorized && error !is NetworkError.Unsupported
+                error !is NetworkError.Unauthorized && error !is NetworkError.Unsupported && error !is NetworkError.InvalidResponse
             }
         },
         block: suspend () -> T
@@ -29,8 +29,9 @@ object NetworkRetryPolicy {
                 if (attempt == maxAttempts || !shouldRetry(e)) {
                     throw e
                 }
-                val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(e.message ?: "")
-                android.util.Log.w("NetworkRetry", "Attempt $attempt failed. Retrying in ${currentDelay}ms. Error: $redactedMsg")
+                val error = mapThrowableToNetworkError(e)
+                val safeMsg = error.message
+                android.util.Log.w("NetworkRetry", "Attempt $attempt failed. Retrying in ${currentDelay}ms. Error: $safeMsg")
                 delay(currentDelay)
                 currentDelay = (currentDelay * factor).toLong().coerceAtMost(10000L)
             }

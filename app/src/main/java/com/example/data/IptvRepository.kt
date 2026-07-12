@@ -18,6 +18,9 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.CancellationException
 import com.example.config.ProviderConfigRegistry
+import com.example.core.network.NetworkError
+import com.example.core.network.mapThrowableToNetworkError
+import com.example.core.network.mapResponseCodeToNetworkError
 
 class IptvRepository(
     private val dao: IptvDao, 
@@ -59,19 +62,23 @@ class IptvRepository(
         if (!isDemo) {
             // Real Xtream Codes validation!
             val urlString = "$cleanServerUrl/player_api.php?username=$username&password=$token"
-            val response = xtreamApiClient.makeHttpGetRequest(urlString)
-            if (response == null) {
-                return@withContext Result.failure(Exception("Unable to connect to Xtream Codes server. Please check the URL and connection."))
+            val response = try {
+                xtreamApiClient.makeHttpGetRequest(urlString)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val safeError = if (e is NetworkError) e else mapThrowableToNetworkError(e)
+                return@withContext Result.failure(safeError)
             }
             try {
-                val root = org.json.JSONObject(response!!)
+                val root = org.json.JSONObject(response)
                 val userInfo = root.optJSONObject("user_info")
                 if (userInfo == null) {
                     val auth = root.optInt("auth", -1)
                     if (auth == 0) {
-                        return@withContext Result.failure(Exception("Invalid username or password."))
+                        return@withContext Result.failure(NetworkError.Unauthorized)
                     }
-                    return@withContext Result.failure(Exception("Invalid response from server. Not a valid Xtream Codes server."))
+                    return@withContext Result.failure(NetworkError.InvalidResponse)
                 }
                 status = userInfo.optString("status", "Active")
                 if (status != "Active" && status != "active" && status.isNotEmpty()) {
@@ -88,7 +95,8 @@ class IptvRepository(
                 maxConnections = userInfo.optInt("max_connections", 1)
                 activeConnections = userInfo.optInt("active_cons", 0)
             } catch (e: Exception) {
-                return@withContext Result.failure(Exception("Authentication parser error: ${e.message}"))
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                return@withContext Result.failure(NetworkError.InvalidResponse)
             }
         }
 
@@ -141,7 +149,8 @@ class IptvRepository(
                 dao.clearLiveChannels(null)
                 dao.upsertLiveChannels(entities)
             } catch (e: Exception) {
-                android.util.Log.e("IptvRepository", "EPG fetch/parse/preseed failed for current session.", e)
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.e("IptvRepository", "EPG fetch/parse/preseed failed for current session.")
             }
         }
 
@@ -185,7 +194,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote categories", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote categories")
                 }
             } else {
                 // Demo / mock setup
@@ -263,7 +273,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote live channels", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote live channels")
                 }
             } else {
                 // Demo setup
@@ -317,7 +328,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote movies", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote movies")
                 }
             } else {
                 // Demo setup
@@ -376,7 +388,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote series", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote series")
                 }
             } else {
                 // Demo setup
@@ -441,7 +454,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote seasons/episodes", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote seasons/episodes")
                 }
             } else {
                 // Demo setup
@@ -534,7 +548,8 @@ class IptvRepository(
                         return@flow
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("IptvRepository", "Failed to sync remote episodes", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    android.util.Log.e("IptvRepository", "Failed to sync remote episodes")
                 }
             } else {
                 // Demo
@@ -779,7 +794,8 @@ class IptvRepository(
                     android.util.Log.e("IptvRepository", "EPG refresh returned empty programs for current session.")
                 }
             } catch (e: Exception) {
-                android.util.Log.e("IptvRepository", "EPG refresh failed for current session.", e)
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                android.util.Log.e("IptvRepository", "EPG refresh failed for current session.")
             }
         }
     }
@@ -840,7 +856,8 @@ class IptvRepository(
             }
             emptyList()
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to fetch football competitions", e)
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("IptvRepository", "Failed to fetch football competitions")
             if (cached.isNotEmpty()) {
                 android.util.Log.d("IptvRepository", "Using stale football competition cache after failure.")
                 return@withContext cached
@@ -1151,10 +1168,10 @@ class IptvRepository(
 
                 throw e
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 android.util.Log.e(
                     "FootballTrace",
-                    "REPOSITORY_ERROR id=$traceId",
-                    e
+                    "REPOSITORY_ERROR id=$traceId"
                 )
 
                 throw e
@@ -1218,9 +1235,19 @@ class IptvRepository(
             val response = client.getHome(providerId)
             Result.success(response)
         } catch (e: Exception) {
-            val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(e.message)
-            android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId: $redactedMsg")
-            Result.failure(e)
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            val error = if (e is NetworkError) e else mapThrowableToNetworkError(e)
+            val category = when (error) {
+                is NetworkError.NoConnection -> "NoConnection"
+                is NetworkError.Timeout -> "Timeout"
+                is NetworkError.Unauthorized -> "Unauthorized"
+                is NetworkError.ServerError -> "ServerError"
+                is NetworkError.InvalidResponse -> "InvalidResponse"
+                is NetworkError.Unsupported -> "Unsupported"
+                else -> "Unknown"
+            }
+            android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId with category: $category")
+            Result.failure(error)
         }
     }
 

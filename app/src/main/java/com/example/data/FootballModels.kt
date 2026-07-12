@@ -414,7 +414,19 @@ open class FootballApiClient(private val baseUrl: String) {
         providerId: String,
         country: String
     ): FootballCompetitionsResponse {
-        return service.getFootballCompetitions(providerId, country)
+        return try {
+            com.example.core.network.NetworkRetryPolicy.retryWithBackoff {
+                try {
+                    service.getFootballCompetitions(providerId, country)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    throw com.example.core.network.mapThrowableToNetworkError(e)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw if (e is com.example.core.network.NetworkError) e else com.example.core.network.mapThrowableToNetworkError(e)
+        }
     }
 
     open suspend fun getBeinFootballSchedule(
@@ -422,7 +434,19 @@ open class FootballApiClient(private val baseUrl: String) {
         country: String,
         competitionKeys: String?
     ): BeinFootballScheduleResponse {
-        return service.getBeinFootballSchedule(providerId, country, competitionKeys)
+        return try {
+            com.example.core.network.NetworkRetryPolicy.retryWithBackoff {
+                try {
+                    service.getBeinFootballSchedule(providerId, country, competitionKeys)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    throw com.example.core.network.mapThrowableToNetworkError(e)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            throw if (e is com.example.core.network.NetworkError) e else com.example.core.network.mapThrowableToNetworkError(e)
+        }
     }
 }
 

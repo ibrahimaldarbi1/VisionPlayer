@@ -131,7 +131,7 @@ fun IptvPlayer(
         }
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("VisionPlayer/1.0.0 (Android; Mobile)")
+            .setUserAgent(com.example.core.network.NetworkClientFactory.USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
         
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
@@ -207,9 +207,8 @@ fun IptvPlayer(
             override fun onPlayerError(error: PlaybackException) {
                 playbackState = Player.STATE_IDLE
                 val redactedHost = com.example.core.redaction.SensitiveDataRedactor.redactHost(streamUrl)
-                val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(error.message)
                 
-                android.util.Log.e("IptvPlayer", "Failed to play stream for host $redactedHost: $redactedMsg")
+                android.util.Log.e("IptvPlayer", "Playback error category: PLAYBACK_ERROR for host $redactedHost")
                 playbackError = "Playback Failed: Media playback error occurred.\nSource Host: $redactedHost"
             }
 

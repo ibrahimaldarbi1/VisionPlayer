@@ -1153,8 +1153,7 @@ class IptvRepository(
                         "totalMs=${
                             SystemClock.elapsedRealtime() -
                                 totalStartedAt
-                        }",
-                    e
+                        }"
                 )
 
                 throw e
@@ -1218,8 +1217,7 @@ class IptvRepository(
             } catch (e: Exception) {
                 android.util.Log.e(
                     "FootballTrace",
-                    "CHANNEL_QUERY_ERROR",
-                    e
+                    "CHANNEL_QUERY_ERROR"
                 )
 
                 emptyList()
@@ -1348,7 +1346,8 @@ class IptvRepository(
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "findMatchingMovie failed", e)
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("IptvRepository", "findMatchingMovie failed")
             null
         }
     }
@@ -1414,7 +1413,8 @@ class IptvRepository(
                 null
             }
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "findMatchingSeries failed", e)
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            android.util.Log.e("IptvRepository", "findMatchingSeries failed")
             null
         }
     }

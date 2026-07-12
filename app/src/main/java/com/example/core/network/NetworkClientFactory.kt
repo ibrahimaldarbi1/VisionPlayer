@@ -6,10 +6,12 @@ import java.util.concurrent.TimeUnit
 
 object NetworkClientFactory {
 
+    const val USER_AGENT = "VisionPlayer/1.0.0 (Android; Mobile)"
+
     private val userAgentInterceptor = Interceptor { chain ->
         val originalRequest = chain.request()
         val requestWithUserAgent = originalRequest.newBuilder()
-            .header("User-Agent", "VisionPlayer/1.0.0 (Android; Mobile)")
+            .header("User-Agent", USER_AGENT)
             .build()
         chain.proceed(requestWithUserAgent)
     }

@@ -257,8 +257,7 @@ class FootballViewModel(
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 android.util.Log.e(
                     "FootballTrace",
-                    "UI_TIMEOUT id=$loadId",
-                    e
+                    "UI_TIMEOUT id=$loadId"
                 )
                 if (requestGeneration == scheduleGeneration) {
                     _uiState.update {
@@ -277,8 +276,7 @@ class FootballViewModel(
             } catch (e: Exception) {
                 android.util.Log.e(
                     "FootballTrace",
-                    "UI_ERROR id=$loadId",
-                    e
+                    "UI_ERROR id=$loadId"
                 )
                 if (requestGeneration == scheduleGeneration) {
                     _uiState.update {

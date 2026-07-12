@@ -3,16 +3,12 @@ package com.example.data
 import android.content.Context
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
-import okhttp3.OkHttpClient
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Query
 import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
-import java.util.concurrent.TimeUnit
 
 // --- 1. Models ---
 
@@ -117,7 +113,7 @@ class FootballPrefs(context: Context) {
                 .putLong("cached_football_competitions_updated_at_v1", System.currentTimeMillis())
                 .apply()
         } catch (e: Exception) {
-            android.util.Log.e("FootballPrefs", "Failed to save cached competitions", e)
+            android.util.Log.e("FootballPrefs", "Failed to save cached competitions")
         }
     }
 
@@ -136,7 +132,7 @@ class FootballPrefs(context: Context) {
             }
             return list
         } catch (e: Exception) {
-            android.util.Log.e("FootballPrefs", "Failed to parse cached competitions", e)
+            android.util.Log.e("FootballPrefs", "Failed to parse cached competitions")
             return emptyList()
         }
     }

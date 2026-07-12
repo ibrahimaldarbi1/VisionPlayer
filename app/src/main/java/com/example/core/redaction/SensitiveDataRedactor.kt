@@ -57,7 +57,8 @@ object SensitiveDataRedactor {
         if (colonIndex >= 0 && colonIndex > input.indexOf(']')) {
             host = input.substring(0, colonIndex)
             port = input.substring(colonIndex + 1)
-            if (!port.all { it.isDigit() }) {
+            val portNum = port.toIntOrNull()
+            if (portNum == null || portNum !in 1..65535) {
                 return null
             }
         } else {
@@ -103,7 +104,12 @@ object SensitiveDataRedactor {
             } else {
                 redactedUrl
             }
-            val colonIndex = hostAndPort.indexOf(':')
+            val colonIndex = if (hostAndPort.contains(']')) {
+                val bracketEnd = hostAndPort.indexOf(']')
+                hostAndPort.indexOf(':', bracketEnd)
+            } else {
+                hostAndPort.indexOf(':')
+            }
             if (colonIndex >= 0) {
                 hostAndPort.substring(0, colonIndex)
             } else {

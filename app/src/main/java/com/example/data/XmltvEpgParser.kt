@@ -4,6 +4,8 @@ import android.util.Xml
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import java.io.StringReader
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -99,7 +101,12 @@ object XmltvEpgParser {
                 }
                 val body = resp.body ?: throw com.example.core.network.NetworkError.InvalidResponse
                 body.charStream().use { reader ->
-                    return parseXmltv(reader)
+                    try {
+                        return parseXmltvStrict(reader)
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        throw com.example.core.network.NetworkError.InvalidResponse
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -188,6 +195,78 @@ object XmltvEpgParser {
             }
         } catch (e: Exception) {
             android.util.Log.e("XmltvEpgParser", "Error parsing XMLTV data")
+        }
+        return programs
+    }
+
+    suspend fun parseXmltvStrict(reader: java.io.Reader): List<EpgProgramEntity> {
+        val programs = mutableListOf<EpgProgramEntity>()
+        val parser = Xml.newPullParser()
+        parser.setInput(reader)
+        var eventType = parser.eventType
+        
+        var hasTvTag = false
+        var currentChannelId: String? = null
+        var currentStart: String? = null
+        var currentStop: String? = null
+        var currentTitle: String? = null
+        var currentDesc: String? = null
+        
+        while (eventType != XmlPullParser.END_DOCUMENT) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val name = parser.name
+            when (eventType) {
+                XmlPullParser.START_TAG -> {
+                    if (name == "tv") {
+                        hasTvTag = true
+                    }
+                    if (name == "programme") {
+                        currentChannelId = parser.getAttributeValue(null, "channel")
+                        currentStart = parser.getAttributeValue(null, "start")
+                        currentStop = parser.getAttributeValue(null, "stop")
+                        currentTitle = null
+                        currentDesc = null
+                    } else if (name == "title") {
+                        currentTitle = parser.nextText()
+                    } else if (name == "desc") {
+                        currentDesc = parser.nextText()
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    if (name == "programme") {
+                        val chanId = currentChannelId
+                        val startStr = currentStart
+                        val stopStr = currentStop
+                        val title = currentTitle ?: ""
+                        
+                        if (chanId != null && startStr != null && stopStr != null) {
+                            val startTime = parseXmltvDate(startStr)
+                            val endTime = parseXmltvDate(stopStr)
+                            if (startTime != null && endTime != null) {
+                                programs.add(
+                                    EpgProgramEntity(
+                                        channelId = chanId,
+                                        title = title,
+                                        description = currentDesc ?: "",
+                                        startTime = startTime,
+                                        endTime = endTime,
+                                        epgId = "${chanId}_$startTime"
+                                    )
+                                )
+                            }
+                        }
+                        currentChannelId = null
+                        currentStart = null
+                        currentStop = null
+                        currentTitle = null
+                        currentDesc = null
+                    }
+                }
+            }
+            eventType = parser.next()
+        }
+        if (!hasTvTag) {
+            throw org.xmlpull.v1.XmlPullParserException("Missing <tv> root element")
         }
         return programs
     }

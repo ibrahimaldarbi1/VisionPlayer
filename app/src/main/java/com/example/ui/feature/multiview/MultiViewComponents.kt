@@ -47,9 +47,15 @@ fun SingleTilePlayer(
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val player = remember(channel.streamUrl) {
+        val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setUserAgent(com.example.core.network.NetworkClientFactory.USER_AGENT)
+            .setAllowCrossProtocolRedirects(true)
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context)
+            .setDataSourceFactory(httpDataSourceFactory)
+
         androidx.media3.exoplayer.ExoPlayer.Builder(context)
             .setRenderersFactory(androidx.media3.exoplayer.DefaultRenderersFactory(context))
-            .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(context))
+            .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
                 playWhenReady = true
                 repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF

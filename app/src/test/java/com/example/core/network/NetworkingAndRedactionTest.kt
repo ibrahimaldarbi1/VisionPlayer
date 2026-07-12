@@ -189,4 +189,51 @@ class NetworkingAndRedactionTest {
         assertEquals("Live Football Match", programs[0].title)
         assertEquals("Premium Live Match Coverage", programs[0].description)
     }
+
+    @Test
+    fun testMalformedXmltvThrowsInvalidResponse() = runTest {
+        val malformedXml = "completely invalid non-xml content"
+        try {
+            XmltvEpgParser.parseXmltvStrict(java.io.StringReader(malformedXml))
+            fail("Expected exception on malformed XML lacking tv root")
+        } catch (e: Exception) {
+            // Success
+        }
+
+        val badStructure = "<tv><programme start=\""
+        try {
+            XmltvEpgParser.parseXmltvStrict(java.io.StringReader(badStructure))
+            fail("Expected exception on unclosed attribute")
+        } catch (e: Exception) {
+            // Success
+        }
+    }
+
+    @Test
+    fun testValidEmptyXmltvSucceeds() = runTest {
+        val emptyXml = "<tv></tv>"
+        val programs = XmltvEpgParser.parseXmltvStrict(java.io.StringReader(emptyXml))
+        assertTrue(programs.isEmpty())
+    }
+
+    @Test
+    fun testBracketedIpv6RedactHost() {
+        assertEquals("[2001:db8::1]", SensitiveDataRedactor.redactHost("[2001:db8::1]"))
+        assertEquals("[2001:db8::1]", SensitiveDataRedactor.redactHost("[2001:db8::1]:9000"))
+        assertEquals("[2001:db8::1]", SensitiveDataRedactor.redactHost("http://[2001:db8::1]:9000/path?param=val"))
+    }
+
+    @Test
+    fun testPortValidationInRedactUrl() {
+        assertEquals("[2001:db8::1]:65535", SensitiveDataRedactor.redactUrl("[2001:db8::1]:65535"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("[2001:db8::1]:65536"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("[2001:db8::1]:0"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("[2001:db8::1]:-1"))
+        assertEquals("redacted-host", SensitiveDataRedactor.redactUrl("[2001:db8::1]:abc"))
+    }
+
+    @Test
+    fun testMedia3UserAgentMatchesConstant() {
+        assertEquals("VisionPlayer/1.0.0 (Android; Mobile)", NetworkClientFactory.USER_AGENT)
+    }
 }

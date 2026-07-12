@@ -25,12 +25,10 @@ object SafeNetworkLogger : Interceptor {
         val response = try {
             chain.proceed(request)
         } catch (e: java.io.IOException) {
-            val redactedMsg = SensitiveDataRedactor.redactExceptionMessage(e.message ?: "Unknown Connection Error")
-            Log.e(TAG, "<-- FAIL $method to host $redactedHost: $redactedMsg")
+            Log.e(TAG, "Network failure category: CONNECTION_ERROR for host $redactedHost")
             throw e
         } catch (e: Exception) {
-            val redactedMsg = SensitiveDataRedactor.redactExceptionMessage(e.message ?: "Unknown Error")
-            Log.e(TAG, "<-- FAIL $method to host $redactedHost: $redactedMsg")
+            Log.e(TAG, "Network failure category: UNKNOWN_ERROR for host $redactedHost")
             throw e
         }
         
@@ -39,8 +37,6 @@ object SafeNetworkLogger : Interceptor {
         
         if (isDebug) {
             Log.d(TAG, "<-- RECV $code in ${durationMs.toInt()}ms for host $redactedHost")
-        } else {
-            Log.i(TAG, "$method $redactedHost returned $code in ${durationMs.toInt()}ms")
         }
         
         return response

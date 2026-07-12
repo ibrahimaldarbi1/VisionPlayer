@@ -28,7 +28,6 @@ fun SeriesLibraryView(
     selectedCategory: String?,
     onCategorySelected: (String?) -> Unit,
     onSeriesClick: (Series) -> Unit,
-    repository: IptvRepository,
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
     favorites: List<FavoriteEntity> = emptyList(),

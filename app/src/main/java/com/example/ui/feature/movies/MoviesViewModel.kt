@@ -7,6 +7,7 @@ import com.example.data.Category
 import com.example.data.FavoriteEntity
 import com.example.data.IptvRepository
 import com.example.data.Movie
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,26 +31,57 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
 
     private var currentProfile: ProviderProfile? = null
 
-    init {
-        viewModelScope.launch {
-            repository.observeVisibleCategories("MOVIE").collect { categories ->
-                _uiState.update { it.copy(categories = categories) }
-            }
-        }
-        viewModelScope.launch {
-            repository.favorites.collect { favs ->
-                _uiState.update { it.copy(favorites = favs) }
-            }
-        }
-    }
+    private var observeCategoriesJob: Job? = null
+    private var observeFavoritesJob: Job? = null
+    private var loadMoviesJob: Job? = null
 
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
         currentProfile = profile
+
         if (oldProfile?.providerId != profile.providerId) {
-            _uiState.update { it.copy(selectedCategoryId = null) }
+            _uiState.update { it.copy(selectedCategoryId = null, movies = emptyList(), error = null) }
         }
-        loadMovies()
+
+        if (profile.features.moviesEnabled) {
+            // Subscribe to categories
+            if (observeCategoriesJob == null || oldProfile?.providerId != profile.providerId) {
+                observeCategoriesJob?.cancel()
+                observeCategoriesJob = viewModelScope.launch {
+                    repository.observeVisibleCategories("MOVIE").collect { categories ->
+                        _uiState.update { it.copy(categories = categories) }
+                    }
+                }
+            }
+
+            // Subscribe to favorites
+            if (profile.features.favoritesEnabled) {
+                if (observeFavoritesJob == null || oldProfile?.providerId != profile.providerId) {
+                    observeFavoritesJob?.cancel()
+                    observeFavoritesJob = viewModelScope.launch {
+                        repository.favorites.collect { favs ->
+                            _uiState.update { it.copy(favorites = favs) }
+                        }
+                    }
+                }
+            } else {
+                observeFavoritesJob?.cancel()
+                observeFavoritesJob = null
+                _uiState.update { it.copy(favorites = emptyList()) }
+            }
+
+            loadMovies()
+        } else {
+            // Feature disabled: cancel everything and clear state immediately
+            observeCategoriesJob?.cancel()
+            observeCategoriesJob = null
+            observeFavoritesJob?.cancel()
+            observeFavoritesJob = null
+            loadMoviesJob?.cancel()
+            loadMoviesJob = null
+
+            _uiState.update { MoviesUiState() }
+        }
     }
 
     fun selectCategory(categoryId: String?) {
@@ -58,6 +90,8 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     fun toggleFavorite(favorite: FavoriteEntity) {
+        val profile = currentProfile ?: return
+        if (!profile.features.moviesEnabled || !profile.features.favoritesEnabled) return
         viewModelScope.launch {
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
@@ -74,8 +108,11 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
         val profile = currentProfile ?: return
         if (!profile.features.moviesEnabled) return
 
+        // Cancel previous loading job to prevent old results overwriting newer state
+        loadMoviesJob?.cancel()
         _uiState.update { it.copy(isLoading = true, error = null) }
-        viewModelScope.launch {
+
+        loadMoviesJob = viewModelScope.launch {
             try {
                 repository.getCategories("MOVIE").first() // Seed cache
                 val categoryId = _uiState.value.selectedCategoryId

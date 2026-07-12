@@ -99,28 +99,20 @@ fun HomeScreen(
     val coroutineScope = rememberCoroutineScope()
 
     // Home recommendations ViewModel state
-    val homeViewModel = remember(repository) { HomeViewModel(repository) }
-    val homeUiState by homeViewModel.uiState.collectAsState()
+    val homeViewModel: HomeViewModel = viewModel(
+        factory = com.example.core.viewmodel.AppViewModelFactory {
+            HomeViewModel(repository)
+        }
+    )
+    val homeUiState by homeViewModel.uiState.collectAsStateWithLifecycle()
+    val homeFavorites by homeViewModel.favorites.collectAsStateWithLifecycle()
+    val homeContinueWatching by homeViewModel.continueWatching.collectAsStateWithLifecycle()
+    val homeRecentlyWatched by homeViewModel.recentlyWatched.collectAsStateWithLifecycle()
+    val unavailableTmdbItem by homeViewModel.unavailableTmdbItem.collectAsStateWithLifecycle()
 
     LaunchedEffect(profile) {
-        homeViewModel.loadHomeData(profile.providerId)
+        homeViewModel.onProfileChanged(profile)
     }
-
-    // Repository states
-    val favorites by repository.favorites.collectAsState(initial = emptyList())
-
-    val toggleFavorite: (FavoriteEntity) -> Unit = { favorite ->
-        coroutineScope.launch {
-            val isFav = favorites.any { it.contentId == favorite.contentId && it.contentType == favorite.contentType }
-            if (isFav) {
-                repository.removeFavorite(favorite.contentId, favorite.contentType)
-            } else {
-                repository.addFavorite(favorite)
-            }
-        }
-    }
-    val continueWatching by repository.continueWatching.collectAsState(initial = emptyList())
-    val recentlyWatched by repository.recentlyWatched.collectAsState(initial = emptyList())
 
     // Live ViewModel & States
     val liveViewModelFactory = remember(repository) {
@@ -192,7 +184,6 @@ fun HomeScreen(
         }
     }
 
-
     LaunchedEffect(navigationState.activeDestination) {
         epgViewModel.onGuideVisibilityChanged(navigationState.activeDestination == AppDestination.EPG)
     }
@@ -257,6 +248,7 @@ fun HomeScreen(
     }
     val seriesViewModel: com.example.ui.feature.series.SeriesViewModel = viewModel(factory = seriesViewModelFactory)
     val seriesState by seriesViewModel.uiState.collectAsStateWithLifecycle()
+    val seriesDetailsUiState by seriesViewModel.detailsUiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(profile) {
         seriesViewModel.onProfileChanged(profile)
@@ -284,8 +276,28 @@ fun HomeScreen(
     val settingsViewModel: com.example.ui.feature.settings.SettingsViewModel = viewModel(factory = settingsViewModelFactory)
     val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(onProfileSelected) {
-        settingsViewModel.initCallbacks(onProfileSelected)
+    // Handle single-shot TMDB events from HomeViewModel
+    LaunchedEffect(homeViewModel) {
+        homeViewModel.events.collect { event ->
+            when (event) {
+                is HomeEvent.PlayMovie -> {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Matched: Playing \"${event.movie.title}\"...",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    onPlayMovie(event.movie)
+                }
+                is HomeEvent.OpenSeries -> {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Matched: \"${event.series.title}\"",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                    seriesViewModel.selectSeries(event.series)
+                }
+            }
+        }
     }
 
     // Multi-view ViewModel
@@ -305,19 +317,16 @@ fun HomeScreen(
     val showMultiViewSetup = multiViewState.showMultiViewSetup
     val pendingMultiViewChannels = multiViewState.pendingMultiViewChannels
 
-    var activeSeriesDetail by remember { mutableStateOf<Series?>(null) }
-    var unavailableTmdbItem by remember { mutableStateOf<HomeItem?>(null) }
-
     val multiViewEnabled = FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)
 
     LaunchedEffect(profile.id, profile.providerId, profile.features) {
         navigationState.onFeaturesChanged(profile.features)
         
         if (!profile.features.seriesEnabled) {
-            activeSeriesDetail = null
+            seriesViewModel.selectSeries(null)
         }
         if (!profile.features.moviesEnabled && !profile.features.seriesEnabled) {
-            unavailableTmdbItem = null
+            homeViewModel.dismissUnavailableDialog()
         }
     }
 
@@ -376,18 +385,18 @@ fun HomeScreen(
                 when (activeDestination) {
                     AppDestination.HOME -> HomeDashboardView(
                         profile = profile,
-                        repository = repository,
-                        favorites = favorites,
-                        continueWatching = continueWatching,
-                        recentlyWatched = recentlyWatched,
+                        favorites = homeFavorites,
+                        continueWatching = homeContinueWatching,
+                        recentlyWatched = homeRecentlyWatched,
                         onPlayLive = onPlayLive,
                         onPlayMovie = onPlayMovie,
                         onPlayEpisode = onPlayEpisode,
-                        onSeriesClick = { activeSeriesDetail = it },
+                        onSeriesClick = seriesViewModel::selectSeries,
                         isTv = isTv,
                         onTabSelected = { navigationState.navigateTo(AppDestination.fromKey(it) ?: AppDestination.HOME, profile.features) },
-                        onToggleFavorite = toggleFavorite,
+                        onToggleFavorite = homeViewModel::toggleFavorite,
                         homeUiState = homeUiState,
+                        onTmdbItemClick = homeViewModel::onTmdbItemClick,
                         footballMatches = footballState.matches,
                         isLoadingFootball = footballState.scheduleLoading,
                         footballLoadError = footballState.scheduleError,
@@ -399,63 +408,7 @@ fun HomeScreen(
                                     { channel ->
                                         multiViewViewModel.addToPending(channel)
                                     }
-                                } else null,
-                        onTmdbItemClick = { item ->
-                            coroutineScope.launch {
-                                val itemTitle = item.title ?: "Untitled"
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Searching IPTV provider for \"$itemTitle\"...",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                                
-                                if (item.mediaType == "tv") {
-                                    val matched = repository.findMatchingSeries(itemTitle)
-                                    val decision = TmdbClickDecisionProcessor.processClick(item, null, matched)
-                                    when (decision) {
-                                        is TmdbClickDecisionProcessor.TmdbClickResult.OpenSeries -> {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "Matched: \"${decision.series.title}\"",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                            activeSeriesDetail = decision.series
-                                        }
-                                        is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "Not available in your provider library.",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                            unavailableTmdbItem = decision.item
-                                        }
-                                        else -> {}
-                                    }
-                                } else {
-                                    val matched = repository.findMatchingMovie(itemTitle)
-                                    val decision = TmdbClickDecisionProcessor.processClick(item, matched, null)
-                                    when (decision) {
-                                        is TmdbClickDecisionProcessor.TmdbClickResult.PlayMovie -> {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "Matched: Playing \"${decision.movie.title}\"...",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                            onPlayMovie(decision.movie)
-                                        }
-                                        is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
-                                            android.widget.Toast.makeText(
-                                                context,
-                                                "Not available in your provider library.",
-                                                android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                            unavailableTmdbItem = decision.item
-                                        }
-                                        else -> {}
-                                    }
-                                }
-                            }
-                        }
+                                } else null
                     )
                     AppDestination.LIVE -> if (profile.features.liveTvEnabled) {
                         LiveChannelsView(
@@ -506,7 +459,6 @@ fun HomeScreen(
                             selectedCategory = moviesState.selectedCategoryId,
                             onCategorySelected = moviesViewModel::selectCategory,
                             onPlayMovie = onPlayMovie,
-                            repository = repository,
                             isTv = isTv,
                             profile = profile,
                             favorites = moviesState.favorites,
@@ -519,8 +471,7 @@ fun HomeScreen(
                             categories = seriesState.categories,
                             selectedCategory = seriesState.selectedCategoryId,
                             onCategorySelected = seriesViewModel::selectCategory,
-                            onSeriesClick = { activeSeriesDetail = it },
-                            repository = repository,
+                            onSeriesClick = seriesViewModel::selectSeries,
                             isTv = isTv,
                             profile = profile,
                             favorites = seriesState.favorites,
@@ -556,7 +507,7 @@ fun HomeScreen(
                             results = searchState.results,
                             onPlayLive = onPlayLive,
                             onPlayMovie = onPlayMovie,
-                            onSeriesClick = { activeSeriesDetail = it },
+                            onSeriesClick = seriesViewModel::selectSeries,
                             isTv = isTv,
                             profile = profile,
                             favorites = searchState.favorites,
@@ -565,8 +516,16 @@ fun HomeScreen(
                     }
                     AppDestination.SETTINGS -> SettingsView(
                         profile = profile,
-                        onProfileSelected = settingsViewModel::selectProfile,
-                        repository = repository,
+                        onProfileSelected = onProfileSelected,
+                        uiState = settingsState,
+                        onRefreshCache = settingsViewModel::refreshCache,
+                        onSetSubScreen = settingsViewModel::setSubScreen,
+                        onShowProfileDialog = settingsViewModel::showProfileDialog,
+                        onSelectTab = settingsViewModel::selectTab,
+                        onReorderCategories = settingsViewModel::reorderCategories,
+                        onSetCategoryPinned = settingsViewModel::setCategoryPinned,
+                        onSetCategoryHidden = settingsViewModel::setCategoryHidden,
+                        onResetCategoryCustomization = settingsViewModel::resetCategoryCustomization,
                         onNavigateToSupport = onNavigateToSupport,
                         onNavigateToParental = onNavigateToParental,
                         onLogout = onLogout,
@@ -578,13 +537,15 @@ fun HomeScreen(
             }
         }
     }
-    activeSeriesDetail?.let { series ->
+
+    seriesDetailsUiState.activeSeries?.let { series ->
         SeriesDetailsDialog(
             series = series,
-            repository = repository,
+            detailsUiState = seriesDetailsUiState,
             profile = profile,
+            onSelectSeason = seriesViewModel::selectSeason,
             onPlayEpisode = onPlayEpisode,
-            onDismiss = { activeSeriesDetail = null }
+            onDismiss = { seriesViewModel.selectSeries(null) }
         )
     }
 
@@ -592,7 +553,7 @@ fun HomeScreen(
         UnavailableTmdbItemDialog(
             item = item,
             profile = profile,
-            onDismiss = { unavailableTmdbItem = null }
+            onDismiss = homeViewModel::dismissUnavailableDialog
         )
     }
 
@@ -650,9 +611,3 @@ fun HomeScreen(
         )
     }
 }
-
-// --- Dynamic Navigation Components ---
-
-
-
-

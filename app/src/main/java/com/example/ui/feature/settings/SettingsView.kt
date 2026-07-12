@@ -23,13 +23,20 @@ import androidx.compose.ui.unit.dp
 import com.example.config.ProviderConfigRegistry
 import com.example.config.ProviderProfile
 import com.example.data.*
-import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsView(
-    profile: com.example.config.ProviderProfile,
-    onProfileSelected: (com.example.config.ProviderProfile) -> Unit,
-    repository: IptvRepository,
+    profile: ProviderProfile,
+    onProfileSelected: (ProviderProfile) -> Unit,
+    uiState: SettingsUiState,
+    onRefreshCache: () -> Unit,
+    onSetSubScreen: (String?) -> Unit,
+    onShowProfileDialog: (Boolean) -> Unit,
+    onSelectTab: (String) -> Unit,
+    onReorderCategories: (List<String>) -> Unit,
+    onSetCategoryPinned: (String, Boolean) -> Unit,
+    onSetCategoryHidden: (String, Boolean) -> Unit,
+    onResetCategoryCustomization: () -> Unit,
     onNavigateToSupport: () -> Unit,
     onNavigateToParental: () -> Unit,
     onLogout: () -> Unit,
@@ -37,13 +44,12 @@ fun SettingsView(
     selectedFootballCompetitionCount: Int,
     onConfigureFootball: () -> Unit = {}
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    var showProfileDialog by remember { mutableStateOf(false) }
-    var subScreen by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE) }
+    var streamFormat by remember { mutableStateOf(sharedPrefs.getString("stream_format", "TS") ?: "TS") }
 
-    val activeSession by repository.activeSession.collectAsState(initial = null)
-    val redactedServer = remember(activeSession) {
-        val url = activeSession?.serverUrl
+    val redactedServer = remember(uiState.activeSession) {
+        val url = uiState.activeSession?.serverUrl
         if (url.isNullOrBlank()) {
             "demo.iptvserver.net"
         } else {
@@ -51,329 +57,306 @@ fun SettingsView(
         }
     }
 
-    if (subScreen == "CATEGORY_MANAGEMENT") {
+    if (uiState.subScreen == "CATEGORY_MANAGEMENT") {
         CategoryManagementView(
             profile = profile,
-            repository = repository,
+            uiState = uiState,
+            onSelectTab = onSelectTab,
+            onReorderCategories = onReorderCategories,
+            onSetCategoryPinned = onSetCategoryPinned,
+            onSetCategoryHidden = onSetCategoryHidden,
+            onResetCategoryCustomization = onResetCategoryCustomization,
             isTv = isTv,
-            onBack = { subScreen = null }
+            onBack = { onSetSubScreen(null) }
         )
     } else {
-
-    if (com.example.BuildConfig.DEBUG && showProfileDialog) {
-        AlertDialog(
-            onDismissRequest = { showProfileDialog = false },
-            title = { Text("Provider Switcher (Demo Only)") },
-            text = {
-                Column {
-                    Text("Select a custom provider profile to instantly reconstruct and customize the player UI and hide disabled features.")
-                    Spacer(modifier = Modifier.height(16.dp))
-                    ProviderConfigRegistry.ALL_PROFILES.forEach { prof ->
-                        Button(
-                            onClick = {
-                                onProfileSelected(prof)
-                                showProfileDialog = false
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (prof.id == profile.id) Color(profile.branding.primaryColor) else Color.DarkGray
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Text(prof.name, color = Color.White)
+        if (com.example.BuildConfig.DEBUG && uiState.showProfileDialog) {
+            AlertDialog(
+                onDismissRequest = { onShowProfileDialog(false) },
+                title = { Text("Provider Switcher (Demo Only)") },
+                text = {
+                    Column {
+                        Text("Select a custom provider profile to instantly reconstruct and customize the player UI and hide disabled features.")
+                        Spacer(modifier = Modifier.height(16.dp))
+                        ProviderConfigRegistry.ALL_PROFILES.forEach { prof ->
+                            Button(
+                                onClick = {
+                                    onProfileSelected(prof)
+                                    onShowProfileDialog(false)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (prof.id == profile.id) Color(profile.branding.primaryColor) else Color.DarkGray
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Text(prof.name, color = Color.White)
+                            }
                         }
                     }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { onShowProfileDialog(false) }) { Text("Close") }
                 }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showProfileDialog = false }) { Text("Close") }
-            }
-        )
-    }
-
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
-        item {
-            Text(
-                text = "SYSTEM SETTINGS",
-                style = MaterialTheme.typography.headlineSmall,
-                color = Color.White,
-                fontWeight = FontWeight.Bold
             )
         }
 
-        item {
-            // Account Details
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.border(
-                    width = 1.dp,
-                    color = Color(0xFF334155).copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(20.dp)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxSize()) {
+            item {
+                Text(
+                    text = "SYSTEM SETTINGS",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
                 )
-            ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.AccountCircle, "Account", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text("Active Account Connection", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Server: $redactedServer", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
             }
-        }
 
-        if (com.example.BuildConfig.DEBUG) {
             item {
-                // Branded Profile Switcher (White Labeling test showcase)
+                // Account Details
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
                     shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .clickable { showProfileDialog = true }
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .testTag("provider_switcher_card")
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Layers, "White-Label", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text("White-Label Provider Profile", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Currently Active: ${profile.name} (Tap to change profiles and see feature-hiding in action)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Category Management Section (Visible if at least one category type is enabled)
-        if (profile.features.liveTvEnabled || profile.features.moviesEnabled || profile.features.seriesEnabled) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .clickable { subScreen = "CATEGORY_MANAGEMENT" }
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .testTag("category_management_card")
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, "Category Management", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text("Category Management", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Hide, reorder, or pin Live, Movie, and Series categories", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-
-        if (profile.features.multiViewEnabled) {
-            item {
-                val context = LocalContext.current
-                val sharedPrefs = remember { context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE) }
-                val activityManager = remember { context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager }
-                val isLowMemoryDevice = remember { activityManager?.isLowRamDevice == true }
-                var maxStreams by remember { mutableStateOf(sharedPrefs.getInt("multi_view_max_streams", if (isLowMemoryDevice) 2 else 4)) }
-
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .testTag("multiview_settings_card")
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.GridView, "Multi-view Settings", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Multi-view Maximum Streams", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                                Text("Configure how many parallel feeds you can stream simultaneously (Max 4)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            listOf(2, 3, 4).forEach { option ->
-                                FilterChip(
-                                    selected = maxStreams == option,
-                                    onClick = {
-                                        maxStreams = option
-                                        sharedPrefs.edit().putInt("multi_view_max_streams", option).apply()
-                                    },
-                                    label = { Text("$option Streams") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = Color(profile.branding.primaryColor),
-                                        selectedLabelColor = Color.White
-                                    ),
-                                    modifier = Modifier.testTag("max_streams_chip_$option")
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (profile.features.parentalControlEnabled) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .clickable(onClick = onNavigateToParental)
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Security, "Parental Control", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text("Parental Controls", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Lock/Unlock adult categories and customize PIN codes", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-
-        if (profile.features.footballScheduleEnabled) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .clickable(onClick = onConfigureFootball)
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                        .testTag("football_settings_card")
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.SportsSoccer,
-                            contentDescription = "Football Schedule",
-                            tint = Color(profile.branding.primaryColor),
-                            modifier = Modifier.size(36.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text("Football Schedule Settings", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            val subtitleText = when {
-                                selectedFootballCompetitionCount == 0 -> "No competitions selected"
-                                selectedFootballCompetitionCount == 1 -> "1 competition selected"
-                                else -> "$selectedFootballCompetitionCount competitions selected"
-                            }
-                            Text(subtitleText, color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            val context = LocalContext.current
-            val sharedPrefs = remember { context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE) }
-            var streamFormat by remember { mutableStateOf(sharedPrefs.getString("stream_format", "TS") ?: "TS") }
-
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.border(
-                    width = 1.dp,
-                    color = Color(0xFF334155).copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(20.dp)
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, "Stream Format", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Live Stream Format", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Switch format if Live streams fail to play (TS vs HLS/M3U8)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("TS", "M3U8").forEach { format ->
-                            val isSelected = streamFormat == format
-                            Button(
-                                onClick = {
-                                    streamFormat = format
-                                    sharedPrefs.edit().putString("stream_format", format).apply()
-                                    coroutineScope.launch { repository.refreshEpg() }
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isSelected) Color(profile.branding.primaryColor) else Color.DarkGray
-                                ),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = if (format == "TS") "TS (.ts) (Default)" else "HLS (.m3u8)",
-                                    color = Color.White,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .clickable {
-                        coroutineScope.launch { repository.refreshEpg() }
-                    }
-                    .border(
+                    modifier = Modifier.border(
                         width = 1.dp,
                         color = Color(0xFF334155).copy(alpha = 0.3f),
                         shape = RoundedCornerShape(20.dp)
                     )
-            ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Sync, "Refresh", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text("Refresh Cache", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Synchronize playlists, movie grids, series guides, and XMLTV EPG databases", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                ) {
+                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.AccountCircle, "Account", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(48.dp))
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text("Active Account Connection", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Server: $redactedServer", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
-        }
 
-        if (profile.features.supportPageEnabled) {
+            if (com.example.BuildConfig.DEBUG) {
+                item {
+                    // Branded Profile Switcher (White Labeling test showcase)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable { onShowProfileDialog(true) }
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .testTag("provider_switcher_card")
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Layers, "White-Label", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("White-Label Provider Profile", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Currently Active: ${profile.name} (Tap to change profiles and see feature-hiding in action)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Category Management Section (Visible if at least one category type is enabled)
+            if (profile.features.liveTvEnabled || profile.features.moviesEnabled || profile.features.seriesEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable { onSetSubScreen("CATEGORY_MANAGEMENT") }
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .testTag("category_management_card")
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Settings, "Category Management", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Category Management", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Hide, reorder, or pin Live, Movie, and Series categories", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (profile.features.multiViewEnabled) {
+                item {
+                    val activityManager = remember { context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager }
+                    val isLowMemoryDevice = remember { activityManager?.isLowRamDevice == true }
+                    var maxStreams by remember { mutableStateOf(sharedPrefs.getInt("multi_view_max_streams", if (isLowMemoryDevice) 2 else 4)) }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .testTag("multiview_settings_card")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.GridView, "Multi-view Settings", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Multi-view Maximum Streams", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("Configure how many parallel feeds you can stream simultaneously (Max 4)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                listOf(2, 3, 4).forEach { option ->
+                                    FilterChip(
+                                        selected = maxStreams == option,
+                                        onClick = {
+                                            maxStreams = option
+                                            sharedPrefs.edit().putInt("multi_view_max_streams", option).apply()
+                                        },
+                                        label = { Text("$option Streams") },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Color(profile.branding.primaryColor),
+                                            selectedLabelColor = Color.White
+                                        ),
+                                        modifier = Modifier.testTag("max_streams_chip_$option")
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (profile.features.parentalControlEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(onClick = onNavigateToParental)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Security, "Parental Control", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Parental Controls", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Lock/Unlock adult categories and customize PIN codes", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (profile.features.footballScheduleEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(onClick = onConfigureFootball)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                            .testTag("football_settings_card")
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.SportsSoccer,
+                                contentDescription = "Football Schedule",
+                                tint = Color(profile.branding.primaryColor),
+                                modifier = Modifier.size(36.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Football Schedule Settings", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                val subtitleText = when {
+                                    selectedFootballCompetitionCount == 0 -> "No competitions selected"
+                                    selectedFootballCompetitionCount == 1 -> "1 competition selected"
+                                    else -> "$selectedFootballCompetitionCount competitions selected"
+                                }
+                                Text(subtitleText, color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
                     shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.border(
+                        width = 1.dp,
+                        color = Color(0xFF334155).copy(alpha = 0.3f),
+                        shape = RoundedCornerShape(20.dp)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Settings, "Stream Format", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Live Stream Format", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Switch format if Live streams fail to play (TS vs HLS/M3U8)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("TS", "M3U8").forEach { format ->
+                                val isSelected = streamFormat == format
+                                Button(
+                                    onClick = {
+                                        streamFormat = format
+                                        sharedPrefs.edit().putString("stream_format", format).apply()
+                                        onRefreshCache()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (isSelected) Color(profile.branding.primaryColor) else Color.DarkGray
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        text = if (format == "TS") "TS (.ts) (Default)" else "HLS (.m3u8)",
+                                        color = Color.White,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    colors = CardColors(
+                        containerColor = Color(profile.branding.surfaceColor),
+                        contentColor = Color.White,
+                        disabledContainerColor = Color(profile.branding.surfaceColor).copy(alpha = 0.5f),
+                        disabledContentColor = Color.Gray
+                    ),
+                    shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
-                        .clickable(onClick = onNavigateToSupport)
+                        .clickable(enabled = !uiState.isRefreshingCache, onClick = onRefreshCache)
                         .border(
                             width = 1.dp,
                             color = Color(0xFF334155).copy(alpha = 0.3f),
@@ -381,44 +364,79 @@ fun SettingsView(
                         )
                 ) {
                     Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.HelpCenter, "Support", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                        if (uiState.isRefreshingCache) {
+                            CircularProgressIndicator(color = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                        } else {
+                            Icon(Icons.Default.Sync, "Refresh", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                        }
                         Spacer(modifier = Modifier.width(16.dp))
                         Column {
-                            Text("Support & Technical FAQ", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Submit bug reports and locate provider contact info", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            Text("Refresh Cache", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = if (uiState.isRefreshingCache) "Synchronizing playlists and guide..." else "Synchronize playlists, movie grids, series guides, and XMLTV EPG databases",
+                                color = Color.LightGray,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
             }
-        }
 
-        item {
-            Button(
-                onClick = onLogout,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("logout_button")
-            ) {
-                Icon(Icons.Default.ExitToApp, "Logout")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("LOGOUT SESSION", fontWeight = FontWeight.Bold)
+            if (profile.features.supportPageEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(onClick = onNavigateToSupport)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.HelpCenter, "Support", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Support & Technical FAQ", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Submit bug reports and locate provider contact info", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Button(
+                    onClick = onLogout,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("logout_button")
+                ) {
+                    Icon(Icons.Default.ExitToApp, "Logout")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("LOGOUT SESSION", fontWeight = FontWeight.Bold)
+                }
             }
         }
-    }
     }
 }
 
 @Composable
 fun CategoryManagementView(
-    profile: com.example.config.ProviderProfile,
-    repository: IptvRepository,
+    profile: ProviderProfile,
+    uiState: SettingsUiState,
+    onSelectTab: (String) -> Unit,
+    onReorderCategories: (List<String>) -> Unit,
+    onSetCategoryPinned: (String, Boolean) -> Unit,
+    onSetCategoryHidden: (String, Boolean) -> Unit,
+    onResetCategoryCustomization: () -> Unit,
     isTv: Boolean,
     onBack: () -> Unit
 ) {
-    val coroutineScope = rememberCoroutineScope()
-
     // Determine enabled tabs
     val tabs = remember(profile) {
         buildList {
@@ -428,10 +446,8 @@ fun CategoryManagementView(
         }
     }
 
-    var selectedTab by remember(tabs) { mutableStateOf(tabs.firstOrNull() ?: "LIVE") }
-
-    val categories by repository.observeAllCategoriesForManagement(selectedTab)
-        .collectAsState(initial = emptyList())
+    val selectedTab = uiState.selectedTab
+    val categories = uiState.categories
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -453,11 +469,7 @@ fun CategoryManagementView(
             )
             Spacer(modifier = Modifier.weight(1f))
             Button(
-                onClick = {
-                    coroutineScope.launch {
-                        repository.resetCategoryCustomization(selectedTab)
-                    }
-                },
+                onClick = onResetCategoryCustomization,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.testTag("reset_categories_button")
             ) {
@@ -478,7 +490,7 @@ fun CategoryManagementView(
                 tabs.forEach { tab ->
                     Tab(
                         selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
+                        onClick = { onSelectTab(tab) },
                         text = {
                             Text(
                                 text = when (tab) {
@@ -495,7 +507,7 @@ fun CategoryManagementView(
             }
         }
 
-        if (categories.isEmpty()) {
+        if (categories.isEmpty() && uiState.isCategoryOperating) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -558,13 +570,11 @@ fun CategoryManagementView(
                             IconButton(
                                 onClick = {
                                     if (index > 0) {
-                                        coroutineScope.launch {
-                                            val listIds = categories.map { it.id }.toMutableList()
-                                            val temp = listIds[index]
-                                            listIds[index] = listIds[index - 1]
-                                            listIds[index - 1] = temp
-                                            repository.updateCategorySortOrder(selectedTab, listIds)
-                                        }
+                                        val listIds = categories.map { it.id }.toMutableList()
+                                        val temp = listIds[index]
+                                        listIds[index] = listIds[index - 1]
+                                        listIds[index - 1] = temp
+                                        onReorderCategories(listIds)
                                     }
                                 },
                                 enabled = index > 0,
@@ -580,13 +590,11 @@ fun CategoryManagementView(
                             IconButton(
                                 onClick = {
                                     if (index < categories.size - 1) {
-                                        coroutineScope.launch {
-                                            val listIds = categories.map { it.id }.toMutableList()
-                                            val temp = listIds[index]
-                                            listIds[index] = listIds[index + 1]
-                                            listIds[index + 1] = temp
-                                            repository.updateCategorySortOrder(selectedTab, listIds)
-                                        }
+                                        val listIds = categories.map { it.id }.toMutableList()
+                                        val temp = listIds[index]
+                                        listIds[index] = listIds[index + 1]
+                                        listIds[index + 1] = temp
+                                        onReorderCategories(listIds)
                                     }
                                 },
                                 enabled = index < categories.size - 1,
@@ -601,9 +609,7 @@ fun CategoryManagementView(
 
                             IconButton(
                                 onClick = {
-                                    coroutineScope.launch {
-                                        repository.setCategoryPinned(selectedTab, item.id, !item.pinned)
-                                    }
+                                    onSetCategoryPinned(item.id, !item.pinned)
                                 },
                                 modifier = Modifier.testTag("pin_button_${item.id}")
                             ) {
@@ -617,9 +623,7 @@ fun CategoryManagementView(
                             Switch(
                                 checked = !item.hidden,
                                 onCheckedChange = { visible ->
-                                    coroutineScope.launch {
-                                        repository.setCategoryHidden(selectedTab, item.id, !visible)
-                                    }
+                                    onSetCategoryHidden(item.id, !visible)
                                 },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color(profile.branding.primaryColor),

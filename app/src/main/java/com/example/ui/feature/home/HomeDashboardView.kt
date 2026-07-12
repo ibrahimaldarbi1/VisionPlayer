@@ -29,7 +29,6 @@ import com.example.ui.screens.HomeUiState
 @Composable
 fun HomeDashboardView(
     profile: com.example.config.ProviderProfile,
-    repository: IptvRepository,
     favorites: List<FavoriteEntity>,
     continueWatching: List<ContinueWatchingEntity>,
     recentlyWatched: List<RecentlyWatchedEntity>,

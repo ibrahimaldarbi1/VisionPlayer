@@ -18,7 +18,9 @@ import kotlinx.coroutines.launch
 data class SearchUiState(
     val query: String = "",
     val results: SearchResults = SearchResults(),
-    val favorites: List<FavoriteEntity> = emptyList()
+    val favorites: List<FavoriteEntity> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null
 )
 
 class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
@@ -30,27 +32,105 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
     val query: StateFlow<String> = _query.asStateFlow()
 
     private var currentProfile: ProviderProfile? = null
+    
+    private var favoritesJob: Job? = null
+    private var observeInputJob: Job? = null
     private var searchJob: Job? = null
 
-    init {
-        viewModelScope.launch {
-            repository.favorites.collect { favs ->
-                _uiState.update { it.copy(favorites = favs) }
-            }
+    private val liveCategories = MutableStateFlow<List<Category>>(emptyList())
+    private val movieCategories = MutableStateFlow<List<Category>>(emptyList())
+    private val seriesCategories = MutableStateFlow<List<Category>>(emptyList())
+
+    private var liveCatsJob: Job? = null
+    private var movieCatsJob: Job? = null
+    private var seriesCatsJob: Job? = null
+
+    fun onProfileChanged(profile: ProviderProfile) {
+        val oldProfile = currentProfile
+        currentProfile = profile
+
+        if (oldProfile?.providerId != profile.providerId) {
+            _query.value = ""
+            _uiState.update { SearchUiState(query = "") }
         }
 
-        viewModelScope.launch {
-            combine(
-                _query,
-                repository.observeVisibleCategories("LIVE"),
-                repository.observeVisibleCategories("MOVIE"),
-                repository.observeVisibleCategories("SERIES")
-            ) { queryText, liveCats, movieCats, seriesCats ->
-                SearchInput(queryText, liveCats, movieCats, seriesCats)
-            }.collect { input ->
-                _uiState.update { it.copy(query = input.queryText) }
-                performSearch(input)
+        if (profile.features.searchEnabled) {
+            // Subscribe to favorites
+            if (profile.features.favoritesEnabled) {
+                if (favoritesJob == null || oldProfile?.providerId != profile.providerId) {
+                    favoritesJob?.cancel()
+                    favoritesJob = viewModelScope.launch {
+                        repository.favorites.collect { favs ->
+                            _uiState.update { it.copy(favorites = favs) }
+                        }
+                    }
+                }
+            } else {
+                favoritesJob?.cancel()
+                favoritesJob = null
+                _uiState.update { it.copy(favorites = emptyList()) }
             }
+
+            // Observe Categories
+            if (liveCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                liveCatsJob?.cancel()
+                liveCatsJob = viewModelScope.launch {
+                    repository.observeVisibleCategories("LIVE").collect { cats ->
+                        liveCategories.value = cats
+                    }
+                }
+            }
+            if (movieCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                movieCatsJob?.cancel()
+                movieCatsJob = viewModelScope.launch {
+                    repository.observeVisibleCategories("MOVIE").collect { cats ->
+                        movieCategories.value = cats
+                    }
+                }
+            }
+            if (seriesCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                seriesCatsJob?.cancel()
+                seriesCatsJob = viewModelScope.launch {
+                    repository.observeVisibleCategories("SERIES").collect { cats ->
+                        seriesCategories.value = cats
+                    }
+                }
+            }
+
+            // Combine inputs for search
+            if (observeInputJob == null || oldProfile?.providerId != profile.providerId) {
+                observeInputJob?.cancel()
+                observeInputJob = viewModelScope.launch {
+                    combine(
+                        _query,
+                        liveCategories,
+                        movieCategories,
+                        seriesCategories
+                    ) { queryText, liveCats, movieCats, seriesCats ->
+                        SearchInput(queryText, liveCats, movieCats, seriesCats)
+                    }.collect { input ->
+                        _uiState.update { it.copy(query = input.queryText) }
+                        performSearch(input)
+                    }
+                }
+            }
+        } else {
+            // Feature disabled: stop all observations and clear state
+            favoritesJob?.cancel()
+            favoritesJob = null
+            observeInputJob?.cancel()
+            observeInputJob = null
+            searchJob?.cancel()
+            searchJob = null
+            liveCatsJob?.cancel()
+            liveCatsJob = null
+            movieCatsJob?.cancel()
+            movieCatsJob = null
+            seriesCatsJob?.cancel()
+            seriesCatsJob = null
+
+            _query.value = ""
+            _uiState.value = SearchUiState()
         }
     }
 
@@ -61,20 +141,13 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         val seriesCats: List<Category>
     )
 
-    fun onProfileChanged(profile: ProviderProfile) {
-        val oldProfile = currentProfile
-        currentProfile = profile
-        if (oldProfile?.providerId != profile.providerId) {
-            _query.value = ""
-            _uiState.update { it.copy(query = "", results = SearchResults()) }
-        }
-    }
-
     fun onQueryChanged(newQuery: String) {
         _query.value = newQuery
     }
 
     fun toggleFavorite(favorite: FavoriteEntity) {
+        val profile = currentProfile ?: return
+        if (!profile.features.searchEnabled || !profile.features.favoritesEnabled) return
         viewModelScope.launch {
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
@@ -91,27 +164,43 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         searchJob?.cancel()
         val profile = currentProfile
         if (profile == null || !profile.features.searchEnabled || input.queryText.isBlank()) {
-            _uiState.update { it.copy(results = SearchResults()) }
+            _uiState.update { it.copy(results = SearchResults(), isLoading = false, error = null) }
             return
         }
 
+        _uiState.update { it.copy(isLoading = true, error = null) }
         searchJob = viewModelScope.launch {
-            repository.searchContent(
-                input.queryText,
-                profile.features.liveTvEnabled,
-                profile.features.moviesEnabled,
-                profile.features.seriesEnabled
-            ).collect { results ->
-                val visibleLiveIds = input.liveCats.map { it.id }.toSet()
-                val visibleMovieIds = input.movieCats.map { it.id }.toSet()
-                val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
+            try {
+                repository.searchContent(
+                    input.queryText,
+                    profile.features.liveTvEnabled,
+                    profile.features.moviesEnabled,
+                    profile.features.seriesEnabled
+                ).collect { results ->
+                    val visibleLiveIds = input.liveCats.map { it.id }.toSet()
+                    val visibleMovieIds = input.movieCats.map { it.id }.toSet()
+                    val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
 
-                val filteredResults = results.copy(
-                    liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
-                    movies = results.movies.filter { it.categoryId in visibleMovieIds },
-                    series = results.series.filter { it.categoryId in visibleSeriesIds }
-                )
-                _uiState.update { it.copy(results = filteredResults) }
+                    val filteredResults = results.copy(
+                        liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
+                        movies = results.movies.filter { it.categoryId in visibleMovieIds },
+                        series = results.series.filter { it.categoryId in visibleSeriesIds }
+                    )
+                    _uiState.update {
+                        it.copy(
+                            results = filteredResults,
+                            isLoading = false,
+                            error = null
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message ?: "Search failed"
+                    )
+                }
             }
         }
     }

@@ -28,7 +28,6 @@ fun MoviesLibraryView(
     selectedCategory: String?,
     onCategorySelected: (String?) -> Unit,
     onPlayMovie: (Movie) -> Unit,
-    repository: IptvRepository,
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
     favorites: List<FavoriteEntity> = emptyList(),

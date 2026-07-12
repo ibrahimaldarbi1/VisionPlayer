@@ -29,38 +29,18 @@ import com.example.data.*
 @Composable
 fun SeriesDetailsDialog(
     series: Series,
-    repository: IptvRepository,
-    profile: com.example.config.ProviderProfile,
+    detailsUiState: SeriesDetailsUiState,
+    profile: ProviderProfile,
+    onSelectSeason: (Season) -> Unit,
     onPlayEpisode: (Series, Episode) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var seasons by remember { mutableStateOf<List<Season>>(emptyList()) }
-    var episodes by remember { mutableStateOf<List<Episode>>(emptyList()) }
-    var selectedSeason by remember { mutableStateOf<Season?>(null) }
-    var isLoadingSeasons by remember { mutableStateOf(true) }
-    var isLoadingEpisodes by remember { mutableStateOf(false) }
-
-    LaunchedEffect(series.id) {
-        isLoadingSeasons = true
-        repository.getSeasons(series.id).collect { fetchedSeasons ->
-            seasons = fetchedSeasons
-            selectedSeason = fetchedSeasons.firstOrNull()
-            isLoadingSeasons = false
-        }
-    }
-
-    LaunchedEffect(series.id, selectedSeason) {
-        val season = selectedSeason
-        if (season != null) {
-            isLoadingEpisodes = true
-            repository.getEpisodes(series.id, season.id).collect { fetchedEpisodes ->
-                episodes = fetchedEpisodes
-                isLoadingEpisodes = false
-            }
-        } else {
-            episodes = emptyList()
-        }
-    }
+    val seasons = detailsUiState.seasons
+    val episodes = detailsUiState.episodes
+    val selectedSeason = detailsUiState.selectedSeason
+    val isLoadingSeasons = detailsUiState.isLoadingSeasons
+    val isLoadingEpisodes = detailsUiState.isLoadingEpisodes
+    val error = detailsUiState.error
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss
@@ -114,7 +94,7 @@ fun SeriesDetailsDialog(
                                     .height(165.dp)
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(Color.DarkGray)
-                             ) {
+                            ) {
                                 AsyncImage(
                                     model = series.posterUrl,
                                     contentDescription = series.title,
@@ -152,6 +132,22 @@ fun SeriesDetailsDialog(
                         }
                     }
 
+                    if (error != null) {
+                        item {
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = error,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            }
+                        }
+                    }
+
                     // Seasons list selector
                     item {
                         Column {
@@ -183,7 +179,7 @@ fun SeriesDetailsDialog(
                                         val isSelected = selectedSeason?.id == s.id
                                         FilterChip(
                                             selected = isSelected,
-                                            onClick = { selectedSeason = s },
+                                            onClick = { onSelectSeason(s) },
                                             label = { Text("Season ${s.seasonNumber}") },
                                             colors = FilterChipDefaults.filterChipColors(
                                                 selectedContainerColor = Color(profile.branding.primaryColor),

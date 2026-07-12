@@ -22,7 +22,7 @@ import com.example.core.network.NetworkError
 import com.example.core.network.mapThrowableToNetworkError
 import com.example.core.network.mapResponseCodeToNetworkError
 
-class IptvRepository(
+open class IptvRepository(
     private val dao: IptvDao, 
     private val context: android.content.Context,
     private val xtreamApiClient: com.example.core.network.XtreamApiClient = com.example.core.network.XtreamApiClient(com.example.core.network.NetworkClientFactory.sharedClient)
@@ -217,27 +217,27 @@ class IptvRepository(
         }.flowOn(Dispatchers.IO)
     }
 
-    fun observeAllCategoriesForManagement(type: String): Flow<List<CategoryManagementItem>> {
+    open fun observeAllCategoriesForManagement(type: String): Flow<List<CategoryManagementItem>> {
         return dao.observeAllCategoriesForManagement(type).map { entities ->
             entities.map { it.toManagementItem() }
         }.flowOn(Dispatchers.IO)
     }
 
-    suspend fun setCategoryHidden(type: String, categoryId: String, hidden: Boolean) = withContext(Dispatchers.IO) {
+    open suspend fun setCategoryHidden(type: String, categoryId: String, hidden: Boolean) = withContext(Dispatchers.IO) {
         dao.setCategoryHidden(type, categoryId, hidden)
     }
 
-    suspend fun setCategoryPinned(type: String, categoryId: String, pinned: Boolean) = withContext(Dispatchers.IO) {
+    open suspend fun setCategoryPinned(type: String, categoryId: String, pinned: Boolean) = withContext(Dispatchers.IO) {
         dao.setCategoryPinned(type, categoryId, pinned)
     }
 
-    suspend fun updateCategorySortOrder(type: String, orderedCategoryIds: List<String>) = withContext(Dispatchers.IO) {
+    open suspend fun updateCategorySortOrder(type: String, orderedCategoryIds: List<String>) = withContext(Dispatchers.IO) {
         orderedCategoryIds.forEachIndexed { index, categoryId ->
             dao.updateCategorySortOrderSingle(type, categoryId, index)
         }
     }
 
-    suspend fun resetCategoryCustomization(type: String) = withContext(Dispatchers.IO) {
+    open suspend fun resetCategoryCustomization(type: String) = withContext(Dispatchers.IO) {
         dao.clearCategoriesByType(type)
         syncCategories(type)
     }
@@ -772,7 +772,7 @@ class IptvRepository(
         return dao.getCurrentProgram(channelId, now)
     }
 
-    suspend fun refreshEpg() = withContext(Dispatchers.IO) {
+    open suspend fun refreshEpg() = withContext(Dispatchers.IO) {
         val session = dao.getSessionDirect() ?: return@withContext
         val now = System.currentTimeMillis()
         

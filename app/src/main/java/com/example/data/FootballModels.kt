@@ -446,12 +446,3 @@ open class FootballApiClient(private val baseUrl: String) {
     }
 }
 
-object FootballVisibilityHelper {
-    fun shouldShowFootballFeature(
-        featureEnabled: Boolean,
-        userEnabled: Boolean
-    ): Boolean {
-        return featureEnabled && userEnabled
-    }
-}
-

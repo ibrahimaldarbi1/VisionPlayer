@@ -33,12 +33,24 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         val generation: Int
     )
 
+    private data class EpgRefreshIdentity(
+        val profileId: String,
+        val providerId: String,
+        val liveEnabled: Boolean,
+        val epgEnabled: Boolean,
+        val generation: Int
+    )
+
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     private var observeCategoriesJob: Job? = null
+    
     private var epgRefreshJob: Job? = null
-    private var categoryOpJob: Job? = null
+    private var epgRefreshGeneration = 0
+    private var activeEpgIdentity: EpgRefreshIdentity? = null
+    
+    private val categoryOpJobs = mutableListOf<Job>()
     private var currentProfile: ProviderProfile? = null
     private var activeOperationsCount = 0
     private var opGeneration = 0
@@ -52,7 +64,8 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     private fun clearCategoryOperations() {
-        categoryOpJob?.cancel()
+        categoryOpJobs.forEach { it.cancel() }
+        categoryOpJobs.clear()
         opGeneration++
         activeOperationsCount = 0
         _uiState.update { it.copy(isCategoryOperating = false, categoryError = null, categories = emptyList()) }
@@ -61,9 +74,16 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
         currentProfile = profile
+        
+        val epgIdentityChanged = oldProfile?.id != profile.id || 
+            oldProfile.providerId != profile.providerId || 
+            oldProfile.features.liveTvEnabled != profile.features.liveTvEnabled || 
+            oldProfile.features.epgEnabled != profile.features.epgEnabled
 
-        if (oldProfile?.id != profile.id || oldProfile.providerId != profile.providerId) {
+        if (epgIdentityChanged) {
             epgRefreshJob?.cancel()
+            epgRefreshGeneration++
+            activeEpgIdentity = null
             _uiState.update { it.copy(isRefreshingCache = false) }
         }
 
@@ -77,13 +97,15 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         if (currentTab !in enabledTabs) {
             val newTab = enabledTabs.firstOrNull() ?: "LIVE"
             _uiState.update { it.copy(selectedTab = newTab) }
+            clearCategoryOperations()
         }
         
         if (enabledTabs.isEmpty()) {
             if (_uiState.value.subScreen == "CATEGORY_MANAGEMENT") {
                 setSubScreen(null)
+            } else {
+                clearCategoryOperations()
             }
-            clearCategoryOperations()
             return
         }
 
@@ -122,6 +144,10 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
 
     fun selectTab(tab: String) {
         if (!isTabEnabled(tab)) return
+        val currentTab = _uiState.value.selectedTab
+        if (currentTab != tab) {
+            clearCategoryOperations()
+        }
         _uiState.update { it.copy(selectedTab = tab) }
         observeCategories()
     }
@@ -156,17 +182,28 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     fun refreshCache() {
         val profile = currentProfile ?: return
         if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(profile.features)) return
-        val currentIdentity = CategoryOpIdentity(profile.id, profile.providerId, "", 0)
+
+        epgRefreshGeneration++
+        val identity = EpgRefreshIdentity(
+            profileId = profile.id,
+            providerId = profile.providerId,
+            liveEnabled = profile.features.liveTvEnabled,
+            epgEnabled = profile.features.epgEnabled,
+            generation = epgRefreshGeneration
+        )
+        activeEpgIdentity = identity
+        
         _uiState.update { it.copy(isRefreshingCache = true) }
         epgRefreshJob?.cancel()
         epgRefreshJob = viewModelScope.launch {
             try {
-                val latestProfile = currentProfile ?: return@launch
-                if (latestProfile.id != currentIdentity.profileId || latestProfile.providerId != currentIdentity.providerId || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(latestProfile.features)) return@launch
+                if (activeEpgIdentity != identity) return@launch
+                val current = currentProfile ?: return@launch
+                if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(current.features)) return@launch
+                
                 repository.refreshEpg()
             } finally {
-                val latestProfile = currentProfile
-                if (latestProfile != null && latestProfile.id == currentIdentity.profileId && latestProfile.providerId == currentIdentity.providerId) {
+                if (activeEpgIdentity == identity) {
                     _uiState.update { it.copy(isRefreshingCache = false) }
                 }
             }
@@ -206,7 +243,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         if (!isOpValid(identity)) return
         
         startOperation()
-        categoryOpJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
                 if (!isOpValid(identity)) return@launch
                 repository.updateCategorySortOrder(tab, listIds)
@@ -218,8 +255,10 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
                 }
             } finally {
                 if (isOpValid(identity)) endOperation()
+                categoryOpJobs.remove(coroutineContext[Job])
             }
         }
+        categoryOpJobs.add(job)
     }
 
     fun setCategoryPinned(categoryId: String, pinned: Boolean) {
@@ -228,7 +267,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         if (!isOpValid(identity)) return
         
         startOperation()
-        categoryOpJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
                 if (!isOpValid(identity)) return@launch
                 repository.setCategoryPinned(tab, categoryId, pinned)
@@ -240,8 +279,10 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
                 }
             } finally {
                 if (isOpValid(identity)) endOperation()
+                categoryOpJobs.remove(coroutineContext[Job])
             }
         }
+        categoryOpJobs.add(job)
     }
 
     fun setCategoryHidden(categoryId: String, hidden: Boolean) {
@@ -250,7 +291,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         if (!isOpValid(identity)) return
         
         startOperation()
-        categoryOpJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
                 if (!isOpValid(identity)) return@launch
                 repository.setCategoryHidden(tab, categoryId, hidden)
@@ -262,8 +303,10 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
                 }
             } finally {
                 if (isOpValid(identity)) endOperation()
+                categoryOpJobs.remove(coroutineContext[Job])
             }
         }
+        categoryOpJobs.add(job)
     }
 
     fun resetCategoryCustomization() {
@@ -272,7 +315,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         if (!isOpValid(identity)) return
         
         startOperation()
-        categoryOpJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             try {
                 if (!isOpValid(identity)) return@launch
                 repository.resetCategoryCustomization(tab)
@@ -284,8 +327,10 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
                 }
             } finally {
                 if (isOpValid(identity)) endOperation()
+                categoryOpJobs.remove(coroutineContext[Job])
             }
         }
+        categoryOpJobs.add(job)
     }
 
     fun clearCategoryError() {

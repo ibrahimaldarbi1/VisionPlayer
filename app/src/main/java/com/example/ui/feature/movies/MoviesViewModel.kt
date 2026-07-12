@@ -34,10 +34,29 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
     private var observeCategoriesJob: Job? = null
     private var observeFavoritesJob: Job? = null
     private var loadMoviesJob: Job? = null
+    
+    private var favoriteMutationGeneration = 0
+    private data class FavoriteMutationIdentity(
+        val profileId: String,
+        val providerId: String,
+        val favoritesEnabled: Boolean,
+        val relevantContentEnabled: Boolean,
+        val generation: Int
+    )
 
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
         currentProfile = profile
+        
+        val identityChanged = oldProfile?.id != profile.id ||
+            oldProfile.providerId != profile.providerId ||
+            oldProfile.features.favoritesEnabled != profile.features.favoritesEnabled ||
+            oldProfile.features.moviesEnabled != profile.features.moviesEnabled
+            
+        if (identityChanged) {
+            favoriteMutationJob?.cancel()
+            favoriteMutationGeneration++
+        }
 
         if (oldProfile?.providerId != profile.providerId) {
             _uiState.update { it.copy(selectedCategoryId = null, movies = emptyList(), error = null) }
@@ -92,20 +111,57 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
     private var favoriteMutationJob: Job? = null
 
     fun toggleFavorite(favorite: FavoriteEntity) {
-        val originalProfile = currentProfile ?: return
-        if (!originalProfile.features.moviesEnabled || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(originalProfile.features)) return
+        val profile = currentProfile ?: return
+        
+        val relevantEnabled = when (favorite.contentType) {
+            "LIVE" -> profile.features.liveTvEnabled
+            "MOVIE" -> profile.features.moviesEnabled
+            "SERIES", "EPISODE" -> profile.features.seriesEnabled
+            else -> false
+        }
+        
+        val identity = FavoriteMutationIdentity(
+            profileId = profile.id,
+            providerId = profile.providerId,
+            favoritesEnabled = profile.features.favoritesEnabled,
+            relevantContentEnabled = relevantEnabled,
+            generation = favoriteMutationGeneration
+        )
+
         favoriteMutationJob?.cancel()
         favoriteMutationJob = viewModelScope.launch {
-            val latestProfile = currentProfile ?: return@launch
-            if (latestProfile.id != originalProfile.id || latestProfile.providerId != originalProfile.providerId || !latestProfile.features.moviesEnabled || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(latestProfile.features)) return@launch
+            val current = currentProfile ?: return@launch
+            val currentRelevantEnabled = when (favorite.contentType) {
+                "LIVE" -> current.features.liveTvEnabled
+                "MOVIE" -> current.features.moviesEnabled
+                "SERIES", "EPISODE" -> current.features.seriesEnabled
+                else -> false
+            }
+            val currentIdentity = FavoriteMutationIdentity(
+                profileId = current.id,
+                providerId = current.providerId,
+                favoritesEnabled = current.features.favoritesEnabled,
+                relevantContentEnabled = currentRelevantEnabled,
+                generation = favoriteMutationGeneration
+            )
+            
+            if (identity != currentIdentity) return@launch
+            if (!identity.favoritesEnabled || !identity.relevantContentEnabled) return@launch
             if (favorite.contentType != "MOVIE") return@launch
+            
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
             }
-            if (isFav) {
-                repository.removeFavorite(favorite.contentId, favorite.contentType)
-            } else {
-                repository.addFavorite(favorite)
+            try {
+                if (isFav) {
+                    repository.removeFavorite(favorite.contentId, favorite.contentType)
+                } else {
+                    repository.addFavorite(favorite)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // ignore
             }
         }
     }

@@ -1,0 +1,1 @@
+sed -i 's/backendBaseUrl = "http:\/\/test",/name = "Test", appName = "Test", backendBaseUrl = "http:\/\/test", branding = com.example.config.BrandingConfig(), support = com.example.config.SupportConfig(),/g' app/src/test/java/com/example/ui/feature/settings/SettingsViewModelTest.kt

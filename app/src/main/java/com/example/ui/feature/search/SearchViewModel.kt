@@ -45,17 +45,46 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
     private var movieCatsJob: Job? = null
     private var seriesCatsJob: Job? = null
 
+    private var favoriteMutationGeneration = 0
+    private data class FavoriteMutationIdentity(
+        val profileId: String,
+        val providerId: String,
+        val favoritesEnabled: Boolean,
+        val relevantContentEnabled: Boolean,
+        val generation: Int
+    )
+
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
         currentProfile = profile
 
-        // Completely invalidate search on profile change, regardless of provider
-        if (oldProfile?.id != profile.id) {
+        val identityChanged = oldProfile?.id != profile.id ||
+            oldProfile.providerId != profile.providerId ||
+            oldProfile.features.searchEnabled != profile.features.searchEnabled ||
+            oldProfile.features.liveTvEnabled != profile.features.liveTvEnabled ||
+            oldProfile.features.moviesEnabled != profile.features.moviesEnabled ||
+            oldProfile.features.seriesEnabled != profile.features.seriesEnabled
+            
+        if (identityChanged) {
             searchJob?.cancel()
             activeRequestIdentity = null
             favoriteMutationJob?.cancel()
-            _query.value = ""
-            _uiState.update { SearchUiState(query = "") }
+            favoriteMutationGeneration++
+            
+            liveCatsJob?.cancel()
+            movieCatsJob?.cancel()
+            seriesCatsJob?.cancel()
+            observeInputJob?.cancel()
+            
+            liveCatsJob = null
+            movieCatsJob = null
+            seriesCatsJob = null
+            observeInputJob = null
+
+            if (!profile.features.searchEnabled) {
+                _query.value = ""
+                _uiState.update { SearchUiState(query = "") }
+            }
         }
         
         if (profile.features.searchEnabled) {
@@ -171,30 +200,56 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
     private var favoriteMutationJob: Job? = null
 
     fun toggleFavorite(favorite: FavoriteEntity) {
-        val identity = activeRequestIdentity ?: return
-        val current = currentProfile ?: return
+        val profile = currentProfile ?: return
+        
+        val relevantEnabled = when (favorite.contentType) {
+            "LIVE" -> profile.features.liveTvEnabled
+            "MOVIE" -> profile.features.moviesEnabled
+            "SERIES", "EPISODE" -> profile.features.seriesEnabled
+            else -> false
+        }
+        
+        val identity = FavoriteMutationIdentity(
+            profileId = profile.id,
+            providerId = profile.providerId,
+            favoritesEnabled = profile.features.favoritesEnabled,
+            relevantContentEnabled = relevantEnabled,
+            generation = favoriteMutationGeneration
+        )
+
         favoriteMutationJob?.cancel()
         favoriteMutationJob = viewModelScope.launch {
-            val profile = currentProfile ?: return@launch
-            if (activeRequestIdentity != identity || profile.id != current.id) return@launch
-            if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
-            
-            val valid = when (favorite.contentType) {
-                "LIVE" -> profile.features.liveTvEnabled
-                "MOVIE" -> profile.features.moviesEnabled
-                "SERIES" -> profile.features.seriesEnabled
-                "EPISODE" -> profile.features.seriesEnabled
+            val current = currentProfile ?: return@launch
+            val currentRelevantEnabled = when (favorite.contentType) {
+                "LIVE" -> current.features.liveTvEnabled
+                "MOVIE" -> current.features.moviesEnabled
+                "SERIES", "EPISODE" -> current.features.seriesEnabled
                 else -> false
             }
-            if (!valid) return@launch
+            val currentIdentity = FavoriteMutationIdentity(
+                profileId = current.id,
+                providerId = current.providerId,
+                favoritesEnabled = current.features.favoritesEnabled,
+                relevantContentEnabled = currentRelevantEnabled,
+                generation = favoriteMutationGeneration
+            )
             
+            if (identity != currentIdentity) return@launch
+            if (!identity.favoritesEnabled || !identity.relevantContentEnabled) return@launch
+
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
             }
-            if (isFav) {
-                repository.removeFavorite(favorite.contentId, favorite.contentType)
-            } else {
-                repository.addFavorite(favorite)
+            try {
+                if (isFav) {
+                    repository.removeFavorite(favorite.contentId, favorite.contentType)
+                } else {
+                    repository.addFavorite(favorite)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Ignore failure
             }
         }
     }

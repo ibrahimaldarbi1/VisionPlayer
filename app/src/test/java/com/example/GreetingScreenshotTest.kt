@@ -34,6 +34,14 @@ class GreetingScreenshotTest {
         composeTestRule.setContent { 
             MyApplicationTheme { 
                 LoginScreen(
+                    profile = com.example.config.ProviderProfile(
+                        id = "test",
+                        name = "Test",
+                        appName = "Test App",
+                        branding = com.example.config.BrandingConfig(),
+                        features = com.example.config.FeatureConfig(),
+                        support = com.example.config.SupportConfig()
+                    ),
                     repository = repository,
                     onLoginSuccess = {},
                     onNavigateToSupport = {}

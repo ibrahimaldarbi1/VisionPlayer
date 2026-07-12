@@ -28,10 +28,10 @@ import kotlinx.coroutines.launch
 @Composable
 fun LoginScreen(
     repository: IptvRepository,
+    profile: com.example.config.ProviderProfile,
     onLoginSuccess: () -> Unit,
-    onNavigateToSupport: () -> Unit
+    onNavigateToSupport: (() -> Unit)?
 ) {
-    val profile = ProviderConfigRegistry.currentProfile
     val coroutineScope = rememberCoroutineScope()
 
     val showDemoPrefills = com.example.config.DemoPolicy.isDemoModeAllowed
@@ -238,7 +238,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             // Support link if enabled
-            if (profile.features.supportPageEnabled) {
+            if (profile.features.supportPageEnabled && onNavigateToSupport != null) {
                 TextButton(
                     onClick = onNavigateToSupport,
                     colors = ButtonDefaults.textButtonColors(contentColor = Color(profile.branding.primaryColor))

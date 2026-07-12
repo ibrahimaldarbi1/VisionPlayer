@@ -83,16 +83,15 @@ class MainActivity : ComponentActivity() {
                         composable("login") {
                             LoginScreen(
                                 repository = repository,
+                                profile = appProfileState,
                                 onLoginSuccess = {
                                     navController.navigate("home") {
                                         popUpTo("login") { inclusive = true }
                                     }
                                 },
-                                onNavigateToSupport = {
-                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
-                                        navController.navigate("support")
-                                    }
-                                }
+                                onNavigateToSupport = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                    { navController.navigate("support") }
+                                } else null
                             )
                         }
 
@@ -109,17 +108,19 @@ class MainActivity : ComponentActivity() {
                                 onAddToMultiViewHandled = { globalAddToMultiViewChannel = null },
                                 onPlayLive = { channel ->
                                     // Save Recently Watched for Live channel
-                                    coroutineScope.launch {
-                                        repository.saveRecentlyWatched(
-                                            RecentlyWatchedEntity(
-                                                contentId = channel.id,
-                                                contentType = "LIVE",
-                                                title = channel.name,
-                                                posterOrLogo = channel.logoUrl,
-                                                streamUrl = channel.streamUrl,
-                                                categoryName = channel.categoryName
+                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(appProfileState.features) && appProfileState.features.liveTvEnabled) {
+                                        coroutineScope.launch {
+                                            repository.saveRecentlyWatched(
+                                                RecentlyWatchedEntity(
+                                                    contentId = channel.id,
+                                                    contentType = "LIVE",
+                                                    title = channel.name,
+                                                    posterOrLogo = channel.logoUrl,
+                                                    streamUrl = channel.streamUrl,
+                                                    categoryName = channel.categoryName
+                                                )
                                             )
-                                        )
+                                        }
                                     }
 
                                     activePlaybackItem = PlaybackItem(
@@ -134,9 +135,12 @@ class MainActivity : ComponentActivity() {
                                 onPlayMovie = { movie ->
                                     // Check if movie progress already exists to resume it
                                     coroutineScope.launch {
-                                        val existing = repository.continueWatching.first()
-                                        val progress = existing.firstOrNull { it.contentId == movie.id }
-                                        val startPos = progress?.positionMs ?: 0L
+                                        var startPos = 0L
+                                        if (FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features) && appProfileState.features.moviesEnabled) {
+                                            val existing = repository.continueWatching.first()
+                                            val progress = existing.firstOrNull { it.contentId == movie.id }
+                                            startPos = progress?.positionMs ?: 0L
+                                        }
 
                                         activePlaybackItem = PlaybackItem(
                                             streamUrl = movie.streamUrl,
@@ -152,9 +156,12 @@ class MainActivity : ComponentActivity() {
                                 onPlayEpisode = { series, episode ->
                                     // Check if episode progress already exists to resume it
                                     coroutineScope.launch {
-                                        val existing = repository.continueWatching.first()
-                                        val progress = existing.firstOrNull { it.contentId == episode.id }
-                                        val startPos = progress?.positionMs ?: 0L
+                                        var startPos = 0L
+                                        if (FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features) && appProfileState.features.seriesEnabled) {
+                                            val existing = repository.continueWatching.first()
+                                            val progress = existing.firstOrNull { it.contentId == episode.id }
+                                            startPos = progress?.positionMs ?: 0L
+                                        }
 
                                         activePlaybackItem = PlaybackItem(
                                             streamUrl = episode.streamUrl,
@@ -171,14 +178,12 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
                                 },
-                                onNavigateToSupport = {
-                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
-                                        navController.navigate("support")
-                                    }
-                                },
-                                onNavigateToParental = {
-                                    navController.navigate("parental")
-                                },
+                                onNavigateToSupport = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                    { navController.navigate("support") }
+                                } else null,
+                                onNavigateToParental = if (FeatureAvailabilityPolicy.shouldShowParentalControls(appProfileState.features)) {
+                                    { navController.navigate("parental") }
+                                } else null,
                                 onLogout = {
                                     coroutineScope.launch {
                                         repository.logout()
@@ -213,133 +218,158 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable("parental") {
-                            ParentalControlScreen(
-                                repository = repository,
-                                onBack = { navController.popBackStack() }
-                            )
+                            val supportEnabled = FeatureAvailabilityPolicy.shouldShowParentalControls(appProfileState.features)
+                            LaunchedEffect(supportEnabled) {
+                                if (!supportEnabled) {
+                                    navController.popBackStack()
+                                }
+                            }
+                            if (supportEnabled) {
+                                ParentalControlScreen(
+                                    repository = repository,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
                         }
                     }
 
                     // Fullscreen Video Player Overlay Layer
                     activePlaybackItem?.let { item ->
-                        AnimatedVisibility(
-                            visible = true,
-                            enter = fadeIn(),
-                            exit = fadeOut(),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            IptvPlayer(
-                                streamUrl = item.streamUrl,
-                                title = item.title,
-                                subtitle = item.subtitle,
-                                isLive = item.isLive,
-                                initialPositionMs = item.initialPositionMs,
-                                onAddToMultiView = if (FeatureAvailabilityPolicy.shouldShowMultiView(appProfileState.features) && item.isLive) {
-                                    {
-                                        globalAddToMultiViewChannel = LiveChannel(
-                                            id = item.contentId,
-                                            name = item.title,
-                                            streamUrl = item.streamUrl,
-                                            logoUrl = item.posterOrLogo,
-                                            categoryId = "",
-                                            categoryName = item.subtitle,
-                                            epgId = "",
-                                            channelNumber = 0
-                                        )
-                                        activePlaybackItem = null // exit solo player!
-                                    }
-                                } else null,
-                                onProgressUpdate = { position, duration ->
-                                    // Live progress tracker persistence (Do not save live feeds progress)
-                                    if (!item.isLive) {
-                                        coroutineScope.launch {
-                                            repository.saveContinueWatching(
-                                                ContinueWatchingEntity(
-                                                    contentId = item.contentId,
-                                                    parentId = item.parentId,
-                                                    contentType = if (item.parentId.isNotEmpty()) "EPISODE" else "MOVIE",
-                                                    title = item.title,
-                                                    parentTitle = item.parentTitle,
-                                                    posterOrLogo = item.posterOrLogo,
-                                                    streamUrl = item.streamUrl,
-                                                    positionMs = position,
-                                                    durationMs = duration,
-                                                    seasonNumber = item.seasonNum,
-                                                    episodeNumber = item.episodeNum
-                                                )
+                        val isPlaybackAllowed = when {
+                            item.isLive -> appProfileState.features.liveTvEnabled
+                            item.parentId.isNotEmpty() -> appProfileState.features.seriesEnabled // Series episode
+                            else -> appProfileState.features.moviesEnabled // Movie
+                        }
+                        LaunchedEffect(isPlaybackAllowed) {
+                            if (!isPlaybackAllowed) {
+                                activePlaybackItem = null
+                            }
+                        }
+                        
+                        if (isPlaybackAllowed) {
+                            AnimatedVisibility(
+                                visible = true,
+                                enter = fadeIn(),
+                                exit = fadeOut(),
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                IptvPlayer(
+                                    streamUrl = item.streamUrl,
+                                    title = item.title,
+                                    subtitle = item.subtitle,
+                                    isLive = item.isLive,
+                                    initialPositionMs = item.initialPositionMs,
+                                    onAddToMultiView = if (FeatureAvailabilityPolicy.shouldShowMultiView(appProfileState.features) && item.isLive) {
+                                        {
+                                            globalAddToMultiViewChannel = LiveChannel(
+                                                id = item.contentId,
+                                                name = item.title,
+                                                streamUrl = item.streamUrl,
+                                                logoUrl = item.posterOrLogo,
+                                                categoryId = "",
+                                                categoryName = item.subtitle,
+                                                epgId = "",
+                                                channelNumber = 0
                                             )
+                                            activePlaybackItem = null // exit solo player!
                                         }
-                                    }
-                                },
-                                onBack = {
-                                    activePlaybackItem = null
-                                },
-                                onNextChannel = {
-                                    // Channel switching support
-                                    coroutineScope.launch {
-                                        val session = repository.activeSession.first()
-                                        val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
-                                        val currentChannels = if (isDemo) {
-                                            IptvMockData.LiveChannels
-                                        } else {
-                                            try {
-                                                repository.getLiveChannels(null).first()
-                                            } catch (e: kotlinx.coroutines.CancellationException) {
-                                                throw e
-                                            } catch (e: Exception) {
-                                                emptyList()
+                                    } else null,
+                                    onProgressUpdate = { position, duration ->
+                                        // Live progress tracker persistence (Do not save live feeds progress)
+                                        if (!item.isLive && FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features)) {
+                                            coroutineScope.launch {
+                                                repository.saveContinueWatching(
+                                                    ContinueWatchingEntity(
+                                                        contentId = item.contentId,
+                                                        parentId = item.parentId,
+                                                        contentType = if (item.parentId.isNotEmpty()) "EPISODE" else "MOVIE",
+                                                        title = item.title,
+                                                        parentTitle = item.parentTitle,
+                                                        posterOrLogo = item.posterOrLogo,
+                                                        streamUrl = item.streamUrl,
+                                                        positionMs = position,
+                                                        durationMs = duration,
+                                                        seasonNumber = item.seasonNum,
+                                                        episodeNumber = item.episodeNum
+                                                    )
+                                                )
                                             }
                                         }
-                                        val idx = currentChannels.indexOfFirst { it.id == item.contentId }
-                                        if (idx != -1 && currentChannels.isNotEmpty()) {
-                                            val nextChan = currentChannels[(idx + 1) % currentChannels.size]
-                                            activePlaybackItem = PlaybackItem(
-                                                streamUrl = nextChan.streamUrl,
-                                                title = nextChan.name,
-                                                subtitle = nextChan.categoryName,
-                                                isLive = true,
-                                                contentId = nextChan.id,
-                                                posterOrLogo = nextChan.logoUrl
-                                             )
-                                         }
-                                     }
-                                 },
-                                onPrevChannel = {
-                                    coroutineScope.launch {
-                                         val session = repository.activeSession.first()
-                                         val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
-                                         val currentChannels = if (isDemo) {
-                                             IptvMockData.LiveChannels
-                                         } else {
-                                             try {
-                                                 repository.getLiveChannels(null).first()
-                                             } catch (e: kotlinx.coroutines.CancellationException) {
-                                                 throw e
-                                             } catch (e: Exception) {
-                                                 emptyList()
-                                             }
-                                         }
-                                         val idx = currentChannels.indexOfFirst { it.id == item.contentId }
-                                         if (idx != -1 && currentChannels.isNotEmpty()) {
-                                             val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
-                                             activePlaybackItem = PlaybackItem(
-                                                 streamUrl = prevChan.streamUrl,
-                                                 title = prevChan.name,
-                                                 subtitle = prevChan.categoryName,
-                                                 isLive = true,
-                                                 contentId = prevChan.id,
-                                                 posterOrLogo = prevChan.logoUrl
-                                             )
-                                         }
-                                     }
-                                 },
-                                onReportProblem = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
-                                    {
+                                    },
+                                    onBack = {
                                         activePlaybackItem = null
-                                        navController.navigate("support")
-                                    }
-                                } else null
-                            )
+                                    },
+                                    onNextChannel = if (appProfileState.features.liveTvEnabled) {
+                                        {
+                                            // Channel switching support
+                                            coroutineScope.launch {
+                                                val session = repository.activeSession.first()
+                                                val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
+                                                val currentChannels = if (isDemo) {
+                                                    IptvMockData.LiveChannels
+                                                } else {
+                                                    try {
+                                                        repository.getLiveChannels(null).first()
+                                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        emptyList()
+                                                    }
+                                                }
+                                                val idx = currentChannels.indexOfFirst { it.id == item.contentId }
+                                                if (idx != -1 && currentChannels.isNotEmpty()) {
+                                                    val nextChan = currentChannels[(idx + 1) % currentChannels.size]
+                                                    activePlaybackItem = PlaybackItem(
+                                                        streamUrl = nextChan.streamUrl,
+                                                        title = nextChan.name,
+                                                        subtitle = nextChan.categoryName,
+                                                        isLive = true,
+                                                        contentId = nextChan.id,
+                                                        posterOrLogo = nextChan.logoUrl
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else null,
+                                    onPrevChannel = if (appProfileState.features.liveTvEnabled) {
+                                        {
+                                            coroutineScope.launch {
+                                                val session = repository.activeSession.first()
+                                                val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
+                                                val currentChannels = if (isDemo) {
+                                                    IptvMockData.LiveChannels
+                                                } else {
+                                                    try {
+                                                        repository.getLiveChannels(null).first()
+                                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                                        throw e
+                                                    } catch (e: Exception) {
+                                                        emptyList()
+                                                    }
+                                                }
+                                                val idx = currentChannels.indexOfFirst { it.id == item.contentId }
+                                                if (idx != -1 && currentChannels.isNotEmpty()) {
+                                                    val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
+                                                    activePlaybackItem = PlaybackItem(
+                                                        streamUrl = prevChan.streamUrl,
+                                                        title = prevChan.name,
+                                                        subtitle = prevChan.categoryName,
+                                                        isLive = true,
+                                                        contentId = prevChan.id,
+                                                        posterOrLogo = prevChan.logoUrl
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else null,
+                                    onReportProblem = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                        {
+                                            activePlaybackItem = null
+                                            navController.navigate("support")
+                                        }
+                                    } else null
+                                )
+                            }
                         }
                     }
                 }

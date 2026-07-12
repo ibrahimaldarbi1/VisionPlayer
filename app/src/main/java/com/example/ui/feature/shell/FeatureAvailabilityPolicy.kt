@@ -38,6 +38,7 @@ object FeatureAvailabilityPolicy {
         if (features.liveTvEnabled && features.epgEnabled) list.add(AppDestination.EPG)
         if (features.moviesEnabled) list.add(AppDestination.MOVIES)
         if (features.seriesEnabled) list.add(AppDestination.SERIES)
+        if (features.searchEnabled) list.add(AppDestination.SEARCH)
         list.add(AppDestination.SETTINGS)
         return list
     }

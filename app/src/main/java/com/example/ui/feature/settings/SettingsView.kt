@@ -37,8 +37,9 @@ fun SettingsView(
     onSetCategoryPinned: (String, Boolean) -> Unit,
     onSetCategoryHidden: (String, Boolean) -> Unit,
     onResetCategoryCustomization: () -> Unit,
-    onNavigateToSupport: () -> Unit,
-    onNavigateToParental: () -> Unit,
+    onNavigateToSupport: (() -> Unit)?,
+    onNavigateToParental: (() -> Unit)?,
+    onNavigateToSearch: () -> Unit,
     onLogout: () -> Unit,
     isTv: Boolean,
     selectedFootballCompetitionCount: Int,
@@ -160,6 +161,31 @@ fun SettingsView(
                 }
             }
 
+            if (!isTv && profile.features.searchEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(onClick = onNavigateToSearch)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Search, "Search", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Search", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("Find channels, movies, and series", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
             // Category Management Section (Visible if at least one category type is enabled)
             if (profile.features.liveTvEnabled || profile.features.moviesEnabled || profile.features.seriesEnabled) {
                 item {
@@ -237,7 +263,7 @@ fun SettingsView(
                 }
             }
 
-            if (profile.features.parentalControlEnabled) {
+            if (profile.features.parentalControlEnabled && onNavigateToParental != null) {
                 item {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
@@ -344,43 +370,45 @@ fun SettingsView(
                 }
             }
 
-            item {
-                Card(
-                    colors = CardColors(
-                        containerColor = Color(profile.branding.surfaceColor),
-                        contentColor = Color.White,
-                        disabledContainerColor = Color(profile.branding.surfaceColor).copy(alpha = 0.5f),
-                        disabledContentColor = Color.Gray
-                    ),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier
-                        .clickable(enabled = !uiState.isRefreshingCache, onClick = onRefreshCache)
-                        .border(
-                            width = 1.dp,
-                            color = Color(0xFF334155).copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(20.dp)
-                        )
-                ) {
-                    Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (uiState.isRefreshingCache) {
-                            CircularProgressIndicator(color = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        } else {
-                            Icon(Icons.Default.Sync, "Refresh", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                        }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text("Refresh Cache", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                            Text(
-                                text = if (uiState.isRefreshingCache) "Synchronizing playlists and guide..." else "Synchronize playlists, movie grids, series guides, and XMLTV EPG databases",
-                                color = Color.LightGray,
-                                style = MaterialTheme.typography.bodySmall
+            if (profile.features.liveTvEnabled && profile.features.epgEnabled) {
+                item {
+                    Card(
+                        colors = CardColors(
+                            containerColor = Color(profile.branding.surfaceColor),
+                            contentColor = Color.White,
+                            disabledContainerColor = Color(profile.branding.surfaceColor).copy(alpha = 0.5f),
+                            disabledContentColor = Color.Gray
+                        ),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(enabled = !uiState.isRefreshingCache, onClick = onRefreshCache)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
                             )
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (uiState.isRefreshingCache) {
+                                CircularProgressIndicator(color = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            } else {
+                                Icon(Icons.Default.Sync, "Refresh", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("Refresh EPG", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (uiState.isRefreshingCache) "Synchronizing XMLTV guide..." else "Synchronize XMLTV EPG database",
+                                    color = Color.LightGray,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            if (profile.features.supportPageEnabled) {
+            if (profile.features.supportPageEnabled && onNavigateToSupport != null) {
                 item {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),

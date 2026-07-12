@@ -86,8 +86,8 @@ fun HomeScreen(
     onPlayLive: (LiveChannel) -> Unit,
     onPlayMovie: (Movie) -> Unit,
     onPlayEpisode: (Series, Episode) -> Unit,
-    onNavigateToSupport: () -> Unit,
-    onNavigateToParental: () -> Unit,
+    onNavigateToSupport: (() -> Unit)?,
+    onNavigateToParental: (() -> Unit)?,
     onLogout: () -> Unit
 ) {
     val context = LocalContext.current
@@ -543,6 +543,7 @@ fun HomeScreen(
                         onResetCategoryCustomization = settingsViewModel::resetCategoryCustomization,
                         onNavigateToSupport = onNavigateToSupport,
                         onNavigateToParental = onNavigateToParental,
+                        onNavigateToSearch = { navigationState.navigateTo(AppDestination.SEARCH, profile.features) },
                         onLogout = onLogout,
                         isTv = isTv,
                         selectedFootballCompetitionCount = footballState.selectedCompetitionKeys.size,

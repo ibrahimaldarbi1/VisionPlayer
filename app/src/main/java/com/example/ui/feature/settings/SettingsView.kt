@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsView(
     profile: com.example.config.ProviderProfile,
+    onProfileSelected: (com.example.config.ProviderProfile) -> Unit,
     repository: IptvRepository,
     onNavigateToSupport: () -> Unit,
     onNavigateToParental: () -> Unit,
@@ -70,7 +71,7 @@ fun SettingsView(
                     ProviderConfigRegistry.ALL_PROFILES.forEach { prof ->
                         Button(
                             onClick = {
-                                ProviderConfigRegistry.currentProfile = prof
+                                onProfileSelected(prof)
                                 showProfileDialog = false
                             },
                             colors = ButtonDefaults.buttonColors(

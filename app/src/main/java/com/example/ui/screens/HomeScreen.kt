@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import com.example.config.ProviderProfile
+
 import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -46,7 +48,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.config.ProviderConfigRegistry
 import com.example.data.*
 import com.example.ui.feature.common.*
 import com.example.ui.feature.home.HomeDashboardView
@@ -77,6 +78,8 @@ import java.util.Locale
 
 @Composable
 fun HomeScreen(
+    profile: ProviderProfile,
+    onProfileSelected: (ProviderProfile) -> Unit,
     repository: IptvRepository,
     addToMultiViewChannel: LiveChannel? = null,
     onAddToMultiViewHandled: () -> Unit = {},
@@ -92,7 +95,6 @@ fun HomeScreen(
     val isTv = deviceType == DeviceType.TV
 
     // Dynamic state triggered by active provider profile configurations
-    val profile = ProviderConfigRegistry.currentProfile
     val navigationState = rememberAppNavigationState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -239,16 +241,6 @@ fun HomeScreen(
     var showMultiViewSetup by remember { mutableStateOf(false) }
     var pendingMultiViewChannels by remember { mutableStateOf<List<LiveChannel>>(emptyList()) }
 
-    LaunchedEffect(addToMultiViewChannel) {
-        addToMultiViewChannel?.let { channel ->
-            if (pendingMultiViewChannels.none { it.id == channel.id }) {
-                pendingMultiViewChannels = pendingMultiViewChannels + channel
-            }
-            showMultiViewSetup = true
-            onAddToMultiViewHandled()
-        }
-    }
-
     var moviesList by remember { mutableStateOf<List<Movie>>(emptyList()) }
     var seriesList by remember { mutableStateOf<List<Series>>(emptyList()) }
     var categoriesMovie by remember { mutableStateOf<List<Category>>(emptyList()) }
@@ -262,6 +254,42 @@ fun HomeScreen(
     var searchResult by remember { mutableStateOf(SearchResults()) }
     var activeSeriesDetail by remember { mutableStateOf<Series?>(null) }
     var unavailableTmdbItem by remember { mutableStateOf<HomeItem?>(null) }
+
+    val multiViewEnabled = FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)
+
+    LaunchedEffect(profile.id, profile.providerId, profile.features) {
+        navigationState.onFeaturesChanged(profile.features)
+        
+        if (!multiViewEnabled) {
+            showMultiViewSetup = false
+            activeMultiViewChannels = null
+            pendingMultiViewChannels = emptyList()
+        }
+        if (!profile.features.seriesEnabled) {
+            activeSeriesDetail = null
+        }
+        if (!profile.features.moviesEnabled && !profile.features.seriesEnabled) {
+            unavailableTmdbItem = null
+        }
+        if (!profile.features.searchEnabled) {
+            searchQuery = ""
+            searchResult = SearchResults()
+        }
+    }
+
+
+    LaunchedEffect(addToMultiViewChannel, multiViewEnabled) {
+        addToMultiViewChannel?.let { channel ->
+            if (multiViewEnabled) {
+                if (pendingMultiViewChannels.none { it.id == channel.id }) {
+                    pendingMultiViewChannels = pendingMultiViewChannels + channel
+                }
+                showMultiViewSetup = true
+            }
+            onAddToMultiViewHandled()
+        }
+    }
+
 
     // Initialize content flows
     LaunchedEffect(
@@ -297,6 +325,10 @@ fun HomeScreen(
 
     // Live search executor
     LaunchedEffect(searchQuery, navigationState.activeDestination, liveState.categories, categoriesMovie, categoriesSeries) {
+        if (!profile.features.searchEnabled || searchQuery.isBlank()) {
+            searchResult = SearchResults()
+            return@LaunchedEffect
+        }
         if (searchQuery.isNotEmpty()) {
             repository.searchContent(
                 searchQuery,
@@ -319,14 +351,14 @@ fun HomeScreen(
     }
 
     // Fullscreen Overlay Layers for Multi-view
-    if (activeMultiViewChannels != null) {
+    if (multiViewEnabled && activeMultiViewChannels != null) {
         MultiViewPlayerScreen(
             channels = activeMultiViewChannels!!,
             allChannels = liveState.channels,
             onBack = { activeMultiViewChannels = null },
             profile = profile
         )
-    } else if (showMultiViewSetup) {
+    } else if (multiViewEnabled && showMultiViewSetup) {
         MultiViewSetupView(
             allChannels = liveState.channels,
             categories = liveState.categories,
@@ -353,7 +385,7 @@ fun HomeScreen(
                     .background(Color(profile.branding.backgroundColor))
                     .padding(16.dp)
             ) {
-                when (navigationState.activeDestination) {
+                when (activeDestination) {
                     AppDestination.HOME -> HomeDashboardView(
                         profile = profile,
                         repository = repository,
@@ -375,12 +407,14 @@ fun HomeScreen(
                         onRetryFootball = { footballViewModel.retrySchedule(profile.providerId) },
                         onConfigureFootball = { footballViewModel.openSettingsDialog() },
                         showFootballScheduleOnHome = footballState.showOnHome,
-                        onAddToMultiView = { channel ->
-                            if (pendingMultiViewChannels.none { it.id == channel.id }) {
-                                pendingMultiViewChannels = pendingMultiViewChannels + channel
-                            }
-                            showMultiViewSetup = true
-                        },
+                        onAddToMultiView = if (multiViewEnabled) {
+                                    { channel ->
+                                        if (pendingMultiViewChannels.none { it.id == channel.id }) {
+                                            pendingMultiViewChannels = pendingMultiViewChannels + channel
+                                        }
+                                        showMultiViewSetup = true
+                                    }
+                                } else null,
                         onTmdbItemClick = { item ->
                             coroutineScope.launch {
                                 val itemTitle = item.title ?: "Untitled"
@@ -546,6 +580,7 @@ fun HomeScreen(
                     }
                     AppDestination.SETTINGS -> SettingsView(
                         profile = profile,
+                        onProfileSelected = onProfileSelected,
                         repository = repository,
                         onNavigateToSupport = onNavigateToSupport,
                         onNavigateToParental = onNavigateToParental,

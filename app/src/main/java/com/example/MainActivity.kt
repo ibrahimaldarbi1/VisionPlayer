@@ -17,6 +17,7 @@ import com.example.data.*
 import com.example.player.IptvPlayer
 import com.example.ui.screens.*
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.feature.shell.FeatureAvailabilityPolicy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -98,7 +99,13 @@ class MainActivity : ComponentActivity() {
                             appProfileState = ProviderConfigRegistry.currentProfile
 
                             HomeScreen(
-                                repository = repository,
+                                    profile = appProfileState,
+                                    onProfileSelected = {
+                                        selectedProfile ->
+                                        ProviderConfigRegistry.currentProfile = selectedProfile
+                                        appProfileState = selectedProfile
+                                    },
+                                    repository = repository,
                                 addToMultiViewChannel = globalAddToMultiViewChannel,
                                 onAddToMultiViewHandled = { globalAddToMultiViewChannel = null },
                                 onPlayLive = { channel ->
@@ -211,7 +218,7 @@ class MainActivity : ComponentActivity() {
                                 subtitle = item.subtitle,
                                 isLive = item.isLive,
                                 initialPositionMs = item.initialPositionMs,
-                                onAddToMultiView = if (appProfileState.features.multiViewEnabled && item.isLive) {
+                                onAddToMultiView = if (FeatureAvailabilityPolicy.shouldShowMultiView(appProfileState.features) && item.isLive) {
                                     {
                                         globalAddToMultiViewChannel = LiveChannel(
                                             id = item.contentId,

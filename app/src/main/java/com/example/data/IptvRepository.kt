@@ -1212,12 +1212,14 @@ class IptvRepository(
     suspend fun loadHome(providerId: String): Result<HomeResponse> = withContext(Dispatchers.IO) {
         try {
             val baseUrl = com.example.config.ProviderConfigRegistry.currentProfile.backendBaseUrl
-            android.util.Log.d("IptvRepository", "Loading home from: $baseUrl/api/v1/home?provider_id=$providerId")
+            val redactedUrl = com.example.core.redaction.SensitiveDataRedactor.redactUrl("$baseUrl/api/v1/home?provider_id=$providerId")
+            android.util.Log.d("IptvRepository", "Loading home from: $redactedUrl")
             val client = HomeApiClient(baseUrl)
             val response = client.getHome(providerId)
             Result.success(response)
         } catch (e: Exception) {
-            android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId", e)
+            val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(e.message)
+            android.util.Log.e("IptvRepository", "Failed to load home for providerId $providerId: $redactedMsg")
             Result.failure(e)
         }
     }

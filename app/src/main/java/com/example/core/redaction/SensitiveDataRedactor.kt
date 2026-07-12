@@ -1,6 +1,5 @@
 package com.example.core.redaction
 
-import android.net.Uri
 import java.net.URI
 
 object SensitiveDataRedactor {
@@ -11,32 +10,63 @@ object SensitiveDataRedactor {
      */
     fun redactUrl(url: String?): String {
         if (url.isNullOrBlank()) return ""
+        val trimmed = url.trim()
         return try {
-            val uri = URI(url)
-            val scheme = uri.scheme
-            val host = uri.host
-            val port = uri.port
-            
-            val hostPart = if (host != null) {
-                if (port != -1) "$host:$port" else host
+            // 1. Extract scheme (http or https)
+            var scheme = "http://"
+            var rest = trimmed
+            val schemeMatch = Regex("^(?i)(https?://)").find(trimmed)
+            if (schemeMatch != null) {
+                scheme = schemeMatch.value.lowercase()
+                rest = trimmed.substring(schemeMatch.range.last + 1)
             } else {
-                // Fallback regex matching if URI parsing fails to extract host due to credentials
-                val regex = Regex("^(https?://)?([^/?:#@]+@)?([^/?:#]+)(.*)$")
-                val match = regex.matchEntire(url)
-                if (match != null) {
-                    match.groupValues[3]
-                } else {
-                    "redacted-host"
+                if (trimmed.contains("://")) {
+                    scheme = trimmed.substringBefore("://").lowercase() + "://"
+                    rest = trimmed.substringAfter("://")
                 }
             }
             
-            if (scheme != null) {
-                "$scheme://$hostPart"
-            } else {
-                hostPart
+            // 2. Strip userinfo (e.g., user:pass@host)
+            if (rest.contains("@")) {
+                val firstSlash = rest.indexOf('/')
+                val firstQuestion = rest.indexOf('?')
+                val firstHash = rest.indexOf('#')
+                val boundary = listOf(firstSlash, firstQuestion, firstHash).filter { it >= 0 }.minOrNull() ?: rest.length
+                val authority = rest.substring(0, boundary)
+                if (authority.contains("@")) {
+                    rest = rest.substring(authority.lastIndexOf('@') + 1)
+                }
             }
+            
+            // 3. Now rest starts with host (and port) followed by path/query/fragment
+            val endOfHost = listOf(rest.indexOf('/'), rest.indexOf('?'), rest.indexOf('#'))
+                .filter { it >= 0 }
+                .minOrNull() ?: rest.length
+            
+            val hostAndPort = rest.substring(0, endOfHost)
+            
+            // 4. Split host and port
+            val colonIndex = hostAndPort.lastIndexOf(':')
+            val host = if (colonIndex >= 0 && colonIndex > hostAndPort.indexOf(']')) {
+                val portStr = hostAndPort.substring(colonIndex + 1)
+                if (portStr.all { it.isDigit() }) {
+                    hostAndPort.substring(0, colonIndex)
+                } else {
+                    hostAndPort
+                }
+            } else {
+                hostAndPort
+            }
+            
+            val portPart = if (colonIndex >= 0 && colonIndex > hostAndPort.indexOf(']')) {
+                val portStr = hostAndPort.substring(colonIndex + 1)
+                if (portStr.all { it.isDigit() }) ":$portStr" else ""
+            } else {
+                ""
+            }
+            
+            "$scheme$host$portPart"
         } catch (e: Exception) {
-            // Safe fallback
             "redacted-host"
         }
     }
@@ -46,18 +76,22 @@ object SensitiveDataRedactor {
      */
     fun redactHost(url: String?): String {
         if (url.isNullOrBlank()) return "Not signed in"
-        if (url.contains("demo") || url.isBlank()) return "demo.iptvserver.net" // or "Not signed in"? Let's handle logout case
+        val redactedUrl = redactUrl(url)
         return try {
-            val uri = URI(url)
-            uri.host ?: "redacted-host"
-        } catch (e: Exception) {
-            val regex = Regex("^(https?://)?([^/?:#@]+@)?([^/?:#]+)(.*)$")
-            val match = regex.matchEntire(url)
-            if (match != null) {
-                match.groupValues[3]
+            val schemeIndex = redactedUrl.indexOf("://")
+            val hostAndPort = if (schemeIndex >= 0) {
+                redactedUrl.substring(schemeIndex + 3)
             } else {
-                "redacted-host"
+                redactedUrl
             }
+            val colonIndex = hostAndPort.indexOf(':')
+            if (colonIndex >= 0) {
+                hostAndPort.substring(0, colonIndex)
+            } else {
+                hostAndPort
+            }
+        } catch (e: Exception) {
+            "redacted-host"
         }
     }
 
@@ -66,19 +100,49 @@ object SensitiveDataRedactor {
      */
     fun redactExceptionMessage(message: String?): String {
         if (message.isNullOrBlank()) return ""
-        // Replace typical credential patterns
         var redacted: String = message
-        val patterns = listOf(
-            Regex("(?i)username=[^&\\s]+"),
-            Regex("(?i)password=[^&\\s]+"),
-            Regex("(?i)token=[^&\\s]+")
-        )
-        for (pattern in patterns) {
-            redacted = redacted.replace(pattern, "redacted")
+
+        // 1. Redact any embedded URLs starting with http:// or https://
+        val urlRegex = Regex("(?i)https?://[^\\s\"'<>]+")
+        redacted = urlRegex.replace(redacted) { match ->
+            redactUrl(match.value)
         }
-        // Also strip long paths that look like stream urls
-        val pathPattern = Regex("/(live|movie|series)/[^/\\s]+/[^/\\s]+")
-        redacted = redacted.replace(pathPattern, "/[redacted-stream-path]")
+
+        // 2. Redact any paths that look like xtream credentials or paths
+        // e.g. /live/username/password/123 or /movie/username/password/123 or /series/username/password/123
+        val xtreamPathRegex = Regex("(?i)/(live|movie|series)/[^/\\s'\"]+/[^/\\s'\"]+[^\\s\"'<>]*(/|$)")
+        redacted = redacted.replace(xtreamPathRegex, "/[redacted-stream-path]")
+
+        // 3. Remove files or scripts
+        val playerApiRegex = Regex("(?i)\\bplayer_api\\.php[^\\s\"'<>/]*")
+        redacted = redacted.replace(playerApiRegex, "[redacted-api-call]")
+
+        val xmltvRegex = Regex("(?i)\\bxmltv\\.php[^\\s\"'<>/]*")
+        redacted = redacted.replace(xmltvRegex, "[redacted-xmltv-call]")
+
+        // 4. Redact any credentials and case variations of username, password, token
+        val credentialPatterns = listOf(
+            Regex("(?i)\\b(username|user|usr|password|pass|pwd|token|tok|xmltv|streamurl)\\s*[:=]\\s*[^&\\s\"'<>]+")
+        )
+        for (pattern in credentialPatterns) {
+            redacted = redacted.replace(pattern) { match ->
+                val key = match.groupValues[1]
+                "$key=[redacted]"
+            }
+        }
+        
+        // Also query parameters: e.g. ?username=... or &password=... or ?token=... or &token=...
+        val queryParamPatterns = listOf(
+            Regex("(?i)([?&])(username|password|token|xmltv|streamurl)=[^&\\s\"'<>]*")
+        )
+        for (pattern in queryParamPatterns) {
+            redacted = redacted.replace(pattern) { match ->
+                val delimiter = match.groupValues[1]
+                val key = match.groupValues[2]
+                "$delimiter$key=[redacted]"
+            }
+        }
+
         return redacted
     }
 
@@ -91,6 +155,6 @@ object SensitiveDataRedactor {
                 lowercase.contains("password") ||
                 lowercase.contains("token") ||
                 lowercase.contains("xmltv") ||
-                lowercase.contains("streamUrl")
+                lowercase.contains("streamurl")
     }
 }

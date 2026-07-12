@@ -44,12 +44,7 @@ interface HomeApiService {
 }
 
 class HomeApiClient(private val baseUrl: String) {
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(baseUrl.removeSuffix("/") + "/")
-        .addConverterFactory(MoshiConverterFactory.create())
-        .build()
-
-    val service: HomeApiService = retrofit.create(HomeApiService::class.java)
+    val service: HomeApiService = com.example.core.network.BackendApiFactory.getHomeApiService(baseUrl)
 
     suspend fun getHome(providerId: String): HomeResponse {
         return service.getHome(providerId)

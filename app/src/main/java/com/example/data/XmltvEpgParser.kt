@@ -10,10 +10,8 @@ import java.util.Locale
 
 object XmltvEpgParser {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
+    private val client: okhttp3.OkHttpClient
+        get() = com.example.core.network.NetworkClientFactory.xmltvClient
 
     fun buildXtreamXmltvUrl(session: SessionEntity): String {
         return "${session.serverUrl}/xmltv.php?username=${session.username}&password=${session.token}"
@@ -70,21 +68,22 @@ object XmltvEpgParser {
         val url = buildXtreamXmltvUrl(session)
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             .build()
 
         try {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    android.util.Log.e("XmltvEpgParser", "EPG XMLTV request failed: non-success status code")
+                    val redactedUrl = com.example.core.redaction.SensitiveDataRedactor.redactUrl(url)
+                    android.util.Log.e("XmltvEpgParser", "EPG XMLTV request failed with code ${response.code} for $redactedUrl")
                     return emptyList()
                 }
                 val bodyString = response.body?.string() ?: return emptyList()
                 return parseXmltv(bodyString)
             }
         } catch (e: Exception) {
-            // Do NOT log credentials! Log a safe message
-            android.util.Log.e("XmltvEpgParser", "EPG fetch/parse failed for current session.")
+            val redactedUrl = com.example.core.redaction.SensitiveDataRedactor.redactUrl(url)
+            val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(e.message)
+            android.util.Log.e("XmltvEpgParser", "EPG fetch/parse failed for $redactedUrl: $redactedMsg")
             return emptyList()
         }
     }

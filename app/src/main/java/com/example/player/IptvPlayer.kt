@@ -206,18 +206,11 @@ fun IptvPlayer(
 
             override fun onPlayerError(error: PlaybackException) {
                 playbackState = Player.STATE_IDLE
-                val sanitizedUrl = try {
-                    val uri = android.net.Uri.parse(streamUrl)
-                    if (uri != null) {
-                        "${uri.scheme}://${uri.host}${uri.path}"
-                    } else {
-                        "[Protected Stream]"
-                    }
-                } catch (e: Exception) {
-                    "[Protected Stream]"
-                }
-                android.util.Log.e("IptvPlayer", "Failed to play stream: $sanitizedUrl", error)
-                playbackError = "Playback Failed: ${error.localizedMessage ?: "Network or Stream Error"}\nSource: $sanitizedUrl"
+                val redactedHost = com.example.core.redaction.SensitiveDataRedactor.redactHost(streamUrl)
+                val redactedMsg = com.example.core.redaction.SensitiveDataRedactor.redactExceptionMessage(error.message)
+                
+                android.util.Log.e("IptvPlayer", "Failed to play stream for host $redactedHost: $redactedMsg")
+                playbackError = "Playback Failed: Media playback error occurred.\nSource Host: $redactedHost"
             }
 
             override fun onIsPlayingChanged(isPlayingChanged: Boolean) {

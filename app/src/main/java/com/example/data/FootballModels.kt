@@ -408,20 +408,7 @@ interface FootballApiService {
 }
 
 open class FootballApiClient(private val baseUrl: String) {
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
-        .callTimeout(20, TimeUnit.SECONDS)
-        .build()
-
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(baseUrl.removeSuffix("/") + "/")
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create())
-        .build()
-
-    val service: FootballApiService = retrofit.create(FootballApiService::class.java)
+    val service: FootballApiService = com.example.core.network.BackendApiFactory.getFootballApiService(baseUrl)
 
     open suspend fun getFootballCompetitions(
         providerId: String,

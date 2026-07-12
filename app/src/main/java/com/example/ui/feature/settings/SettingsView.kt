@@ -68,7 +68,7 @@ fun SettingsView(
             onDismissCategoryError = onDismissCategoryError
         )
     } else {
-        if (com.example.BuildConfig.DEBUG && uiState.showProfileDialog) {
+        if (com.example.config.DemoPolicy.isDemoModeAllowed && uiState.showProfileDialog) {
             AlertDialog(
                 onDismissRequest = { onShowProfileDialog(false) },
                 title = { Text("Provider Switcher (Demo Only)") },
@@ -133,7 +133,7 @@ fun SettingsView(
                 }
             }
 
-            if (com.example.BuildConfig.DEBUG) {
+            if (com.example.config.DemoPolicy.isDemoModeAllowed) {
                 item {
                     // Branded Profile Switcher (White Labeling test showcase)
                     Card(

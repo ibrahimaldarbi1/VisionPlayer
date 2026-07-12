@@ -36,7 +36,7 @@ class IptvRepository(
     }
 
     private fun isDemoSession(session: SessionEntity): Boolean {
-        return com.example.config.DemoPolicy.isDemoSession(session.username, session.serverUrl)
+        return com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
     }
 
     // --- Session / Authentication ---
@@ -53,7 +53,7 @@ class IptvRepository(
             return@withContext Result.failure(IllegalArgumentException("Invalid Server URL format. Must start with http:// or https://"))
         }
 
-        val isDemo = com.example.config.DemoPolicy.isDemoSession(username, cleanServerUrl)
+        val isDemo = com.example.config.DemoPolicy.isDemoSession(username, token, cleanServerUrl)
         var expiryDate = "2028-12-31 (Active)"
         var status = "Active"
         var maxConnections = 4

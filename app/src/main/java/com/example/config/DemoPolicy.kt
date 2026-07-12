@@ -14,17 +14,26 @@ object DemoPolicy {
      * Determines whether a given session is an authorized demo session.
      * It is ONLY authorized if isDemoModeAllowed is true AND the credentials match exactly.
      */
-    fun isDemoSession(username: String?, serverUrl: String?): Boolean {
+    fun isDemoSession(username: String?, token: String?, serverUrl: String?): Boolean {
         if (!isDemoModeAllowed) return false
-        if (username == null || serverUrl == null) return false
+        if (username == null || token == null || serverUrl == null) return false
         
         val cleanUrl = serverUrl.trim().removeSuffix("/")
         val cleanUser = username.trim()
+        val cleanToken = token.trim()
         
-        // Exact matching, no substring heuristics.
+        // Exact matching, no substring heuristics or partial credentials.
         val isExactDemoUser = cleanUser == "demo_user"
         val isExactDemoUrl = cleanUrl == "https://demo.iptvserver.net" || cleanUrl == "http://demo.iptvserver.net"
+        val isExactDemoToken = cleanToken == "demo_pass"
         
-        return isExactDemoUser && isExactDemoUrl
+        return isExactDemoUser && isExactDemoUrl && isExactDemoToken
+    }
+
+    /**
+     * Backwards-compatible overload. Assumes the standard "demo_pass" password.
+     */
+    fun isDemoSession(username: String?, serverUrl: String?): Boolean {
+        return isDemoSession(username, "demo_pass", serverUrl)
     }
 }

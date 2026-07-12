@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,23 +25,26 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.config.ProviderConfigRegistry
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.config.ProviderProfile
+import com.example.core.support.ContactIntentBuilder
 import com.example.core.support.DiagnosticReportBuilder
-import com.example.data.IptvRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SupportScreen(
-    repository: IptvRepository,
+    profile: ProviderProfile,
+    viewModel: SupportViewModel,
+    isTv: Boolean,
     onBack: () -> Unit,
     onSendIntent: (Intent) -> Unit = {}
 ) {
-    val profile = ProviderConfigRegistry.currentProfile
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
 
-    val activeSession by repository.activeSession.collectAsState(initial = null)
+    // Lifecycle-aware collection of the active session server URL
+    val activeServerUrl by viewModel.activeServerUrl.collectAsStateWithLifecycle()
 
     var activeTicketType by remember { mutableStateOf("Channel Not Working") }
     var ticketDetails by remember { mutableStateOf("") }
@@ -53,15 +58,15 @@ fun SupportScreen(
         "General Feedback"
     )
 
-    // Build the diagnostic report dynamically using our centralized builder
-    val diagnosticReport = remember(activeSession, activeTicketType, ticketDetails) {
+    // Build diagnostic report dynamically using the centralized DiagnosticReportBuilder
+    val diagnosticReport = remember(activeServerUrl, activeTicketType, ticketDetails, isTv) {
         DiagnosticReportBuilder.buildReport(
             context = context,
             profile = profile,
-            activeServerUrl = activeSession?.serverUrl,
+            activeServerUrl = activeServerUrl,
             subject = activeTicketType,
             description = ticketDetails,
-            isTv = false // Default/Fallback
+            isTv = isTv
         )
     }
 
@@ -86,7 +91,7 @@ fun SupportScreen(
                     modifier = Modifier
                         .background(Color(profile.branding.surfaceColor), RoundedCornerShape(12.dp))
                         .testTag("support_back_button")
-                        .size(48.dp) // Accessibility min target
+                        .size(48.dp)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
                 }
@@ -216,21 +221,39 @@ fun SupportScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 // Email Channel
+                val emailAddress = profile.support.email
+                val isEmailValid = ContactIntentBuilder.isValidEmail(emailAddress)
                 Button(
                     onClick = {
-                        val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
-                            data = Uri.parse("mailto:${profile.support.email}")
-                            putExtra(Intent.EXTRA_SUBJECT, "[${profile.appName}] Support - $activeTicketType")
-                            putExtra(Intent.EXTRA_TEXT, diagnosticReport)
+                        if (!isEmailValid) {
+                            Toast.makeText(context, "Invalid support email configured.", Toast.LENGTH_SHORT).show()
+                            return@Button
                         }
-                        try {
-                            context.startActivity(emailIntent)
-                            onSendIntent(emailIntent)
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "No email app found. Please copy report and contact manually.", Toast.LENGTH_LONG).show()
+                        val emailIntent = ContactIntentBuilder.buildEmailIntent(
+                            recipient = emailAddress,
+                            subject = "[${profile.appName}] Support - $activeTicketType",
+                            body = diagnosticReport
+                        )
+                        
+                        val resolveOk = emailIntent.resolveActivity(context.packageManager) != null
+                        if (resolveOk) {
+                            try {
+                                context.startActivity(emailIntent)
+                                onSendIntent(emailIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to open email app.", Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            // Secondary direct execution in case queries limit visibility on Android 11+
+                            try {
+                                context.startActivity(emailIntent)
+                                onSendIntent(emailIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No email app found. Please copy report and contact manually.", Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
-                    enabled = ticketDetails.isNotBlank(),
+                    enabled = ticketDetails.isNotBlank() && isEmailValid,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(profile.branding.primaryColor)),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -239,32 +262,42 @@ fun SupportScreen(
                 ) {
                     Icon(Icons.Default.Email, "Email")
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("SEND VIA EMAIL", fontWeight = FontWeight.Bold)
+                    Text("OPEN EMAIL APP", fontWeight = FontWeight.Bold)
                 }
 
                 // Telegram Channel
+                val rawTelegram = profile.support.telegram
+                val normalizedTelegram = ContactIntentBuilder.normalizeTelegramHandle(rawTelegram)
                 Button(
                     onClick = {
-                        val handle = profile.support.telegram.substringAfterLast("/")
-                        val primaryIntent = Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=$handle"))
-                        val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/$handle"))
+                        if (normalizedTelegram == null) {
+                            Toast.makeText(context, "Invalid Telegram handle configured.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        clipboardManager.setText(AnnotatedString(diagnosticReport))
+                        Toast.makeText(context, "Report copied! Please paste it in the chat.", Toast.LENGTH_LONG).show()
+
+                        val telegramUrl = ContactIntentBuilder.buildTelegramUrl(normalizedTelegram)
+                        val telegramIntent = Intent(Intent.ACTION_VIEW, Uri.parse(telegramUrl))
                         
-                        try {
-                            clipboardManager.setText(AnnotatedString(diagnosticReport))
-                            Toast.makeText(context, "Report copied to clipboard! Paste it in the chat.", Toast.LENGTH_LONG).show()
-                            
-                            context.startActivity(primaryIntent)
-                            onSendIntent(primaryIntent)
-                        } catch (e: Exception) {
+                        val resolveOk = telegramIntent.resolveActivity(context.packageManager) != null
+                        if (resolveOk) {
                             try {
-                                context.startActivity(fallbackIntent)
-                                onSendIntent(fallbackIntent)
-                            } catch (ex: Exception) {
-                                Toast.makeText(context, "No Telegram app or web browser found.", Toast.LENGTH_LONG).show()
+                                context.startActivity(telegramIntent)
+                                onSendIntent(telegramIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to open Telegram.", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            try {
+                                context.startActivity(telegramIntent)
+                                onSendIntent(telegramIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No browser or Telegram app found.", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
-                    enabled = ticketDetails.isNotBlank(),
+                    enabled = ticketDetails.isNotBlank() && normalizedTelegram != null,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0088CC)), // Telegram Blue
                     modifier = Modifier
                         .fillMaxWidth()
@@ -272,24 +305,39 @@ fun SupportScreen(
                 ) {
                     Icon(Icons.Default.Send, "Telegram")
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("SEND VIA TELEGRAM", fontWeight = FontWeight.Bold)
+                    Text("OPEN TELEGRAM CHAT", fontWeight = FontWeight.Bold)
                 }
 
                 // WhatsApp Channel
+                val rawWhatsapp = profile.support.whatsapp
+                val normalizedWhatsapp = ContactIntentBuilder.normalizeWhatsAppNumber(rawWhatsapp)
                 Button(
                     onClick = {
-                        val cleanPhone = profile.support.whatsapp.replace("+", "").replace(" ", "").replace("-", "").trim()
-                        val whatsappUri = Uri.parse("https://wa.me/$cleanPhone?text=${Uri.encode(diagnosticReport)}")
-                        val whatsappIntent = Intent(Intent.ACTION_VIEW, whatsappUri)
+                        if (normalizedWhatsapp == null) {
+                            Toast.makeText(context, "Invalid WhatsApp number configured.", Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val whatsappUrl = ContactIntentBuilder.buildWhatsAppUrl(normalizedWhatsapp, diagnosticReport)
+                        val whatsappIntent = Intent(Intent.ACTION_VIEW, Uri.parse(whatsappUrl))
                         
-                        try {
-                            context.startActivity(whatsappIntent)
-                            onSendIntent(whatsappIntent)
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "No WhatsApp app or web browser found.", Toast.LENGTH_LONG).show()
+                        val resolveOk = whatsappIntent.resolveActivity(context.packageManager) != null
+                        if (resolveOk) {
+                            try {
+                                context.startActivity(whatsappIntent)
+                                onSendIntent(whatsappIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to open WhatsApp.", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            try {
+                                context.startActivity(whatsappIntent)
+                                onSendIntent(whatsappIntent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No browser or WhatsApp app found.", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
-                    enabled = ticketDetails.isNotBlank(),
+                    enabled = ticketDetails.isNotBlank() && normalizedWhatsapp != null,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)), // WhatsApp Green
                     modifier = Modifier
                         .fillMaxWidth()
@@ -297,7 +345,7 @@ fun SupportScreen(
                 ) {
                     Icon(Icons.Default.Phone, "WhatsApp")
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("SEND VIA WHATSAPP", fontWeight = FontWeight.Bold)
+                    Text("OPEN WHATSAPP CHAT", fontWeight = FontWeight.Bold)
                 }
             }
         }

@@ -5,6 +5,10 @@ import android.os.Build
 import com.example.BuildConfig
 import com.example.config.ProviderProfile
 import com.example.core.redaction.AccountHostHelper
+import com.example.core.redaction.SensitiveDataRedactor
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object DiagnosticReportBuilder {
 
@@ -16,7 +20,8 @@ object DiagnosticReportBuilder {
         description: String,
         isTv: Boolean,
         cacheAgeMs: Long? = null,
-        isNetworkConnected: Boolean? = null
+        isNetworkConnected: Boolean? = null,
+        errorCategory: String? = null
     ): String {
         val appName = profile.appName
         val versionName = BuildConfig.VERSION_NAME
@@ -30,9 +35,15 @@ object DiagnosticReportBuilder {
         val classification = if (isTv) "TV" else "Phone"
         
         val redactedHost = AccountHostHelper.formatRedactedHost(activeServerUrl)
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        
+        // Sanitize inputs
+        val sanitizedSubject = SensitiveDataRedactor.redactExceptionMessage(subject)
+        val sanitizedDescription = SensitiveDataRedactor.redactExceptionMessage(description)
         
         val sb = java.lang.StringBuilder()
         sb.append("=== SUPPORT DIAGNOSTIC REPORT ===\n")
+        sb.append("Date/Time: $timestamp\n")
         sb.append("App Name: $appName\n")
         sb.append("App Version: $versionName ($versionCode)\n")
         sb.append("Provider ID: $providerId\n")
@@ -41,9 +52,12 @@ object DiagnosticReportBuilder {
         sb.append("Android OS: $androidVersion\n")
         sb.append("Classification: $classification\n")
         sb.append("Active Account Host: $redactedHost\n")
+        if (errorCategory != null) {
+            sb.append("Error Category: $errorCategory\n")
+        }
         sb.append("---------------------------------\n")
-        sb.append("Subject: $subject\n")
-        sb.append("Description: $description\n")
+        sb.append("Subject: $sanitizedSubject\n")
+        sb.append("Description: $sanitizedDescription\n")
         sb.append("---------------------------------\n")
         sb.append("Diagnostic Metrics:\n")
         if (cacheAgeMs != null) {

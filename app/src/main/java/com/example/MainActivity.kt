@@ -89,7 +89,9 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onNavigateToSupport = {
-                                    navController.navigate("support")
+                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                        navController.navigate("support")
+                                    }
                                 }
                             )
                         }
@@ -170,7 +172,9 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onNavigateToSupport = {
-                                    navController.navigate("support")
+                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
+                                        navController.navigate("support")
+                                    }
                                 },
                                 onNavigateToParental = {
                                     navController.navigate("parental")
@@ -187,10 +191,21 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable("support") {
-                            SupportScreen(
-                                repository = repository,
-                                onBack = { navController.popBackStack() }
-                            )
+                            val supportEnabled = com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)
+                            LaunchedEffect(supportEnabled) {
+                                if (!supportEnabled) {
+                                    navController.popBackStack("home", inclusive = false)
+                                }
+                            }
+                            if (supportEnabled) {
+                                val supportViewModel = remember(repository) { SupportViewModel(repository) }
+                                SupportScreen(
+                                    profile = appProfileState,
+                                    viewModel = supportViewModel,
+                                    isTv = com.example.ui.feature.common.rememberDeviceType() == com.example.ui.feature.common.DeviceType.TV,
+                                    onBack = { navController.popBackStack() }
+                                )
+                            }
                         }
 
                         composable("parental") {
@@ -259,15 +274,15 @@ class MainActivity : ComponentActivity() {
                                     // Channel switching support
                                     coroutineScope.launch {
                                         val session = repository.activeSession.first()
-                                        val isDemo = session == null || session.username == "demo_user" || session.username == "demo" || session.serverUrl.contains("demo") || session.serverUrl.isBlank()
-                                        val currentChannels = if (!isDemo) {
+                                        val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
+                                        val currentChannels = if (isDemo) {
+                                            IptvMockData.LiveChannels
+                                        } else {
                                             try {
                                                 repository.getLiveChannels(null).first()
                                             } catch (e: Exception) {
-                                                IptvMockData.LiveChannels
+                                                emptyList()
                                             }
-                                        } else {
-                                            IptvMockData.LiveChannels
                                         }
                                         val idx = currentChannels.indexOfFirst { it.id == item.contentId }
                                         if (idx != -1 && currentChannels.isNotEmpty()) {
@@ -279,37 +294,37 @@ class MainActivity : ComponentActivity() {
                                                 isLive = true,
                                                 contentId = nextChan.id,
                                                 posterOrLogo = nextChan.logoUrl
-                                            )
-                                        }
-                                    }
-                                },
+                                             )
+                                         }
+                                     }
+                                 },
                                 onPrevChannel = {
                                     coroutineScope.launch {
-                                        val session = repository.activeSession.first()
-                                        val isDemo = session == null || session.username == "demo_user" || session.username == "demo" || session.serverUrl.contains("demo") || session.serverUrl.isBlank()
-                                        val currentChannels = if (!isDemo) {
-                                            try {
-                                                repository.getLiveChannels(null).first()
-                                            } catch (e: Exception) {
-                                                IptvMockData.LiveChannels
-                                            }
-                                        } else {
-                                            IptvMockData.LiveChannels
-                                        }
-                                        val idx = currentChannels.indexOfFirst { it.id == item.contentId }
-                                        if (idx != -1 && currentChannels.isNotEmpty()) {
-                                            val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
-                                            activePlaybackItem = PlaybackItem(
-                                                streamUrl = prevChan.streamUrl,
-                                                title = prevChan.name,
-                                                subtitle = prevChan.categoryName,
-                                                isLive = true,
-                                                contentId = prevChan.id,
-                                                posterOrLogo = prevChan.logoUrl
-                                            )
-                                        }
-                                    }
-                                },
+                                         val session = repository.activeSession.first()
+                                         val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
+                                         val currentChannels = if (isDemo) {
+                                             IptvMockData.LiveChannels
+                                         } else {
+                                             try {
+                                                 repository.getLiveChannels(null).first()
+                                             } catch (e: Exception) {
+                                                 emptyList()
+                                             }
+                                         }
+                                         val idx = currentChannels.indexOfFirst { it.id == item.contentId }
+                                         if (idx != -1 && currentChannels.isNotEmpty()) {
+                                             val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
+                                             activePlaybackItem = PlaybackItem(
+                                                 streamUrl = prevChan.streamUrl,
+                                                 title = prevChan.name,
+                                                 subtitle = prevChan.categoryName,
+                                                 isLive = true,
+                                                 contentId = prevChan.id,
+                                                 posterOrLogo = prevChan.logoUrl
+                                             )
+                                         }
+                                     }
+                                 },
                                 onReportProblem = {
                                     activePlaybackItem = null
                                     navController.navigate("support")

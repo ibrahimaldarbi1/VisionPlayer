@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.config.ProviderProfile
 import com.example.data.*
@@ -31,7 +32,10 @@ fun SeriesLibraryView(
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
     favorites: List<FavoriteEntity> = emptyList(),
-    onToggleFavorite: (FavoriteEntity) -> Unit = {}
+    onToggleFavorite: (FavoriteEntity) -> Unit = {},
+    isLoading: Boolean = false,
+    error: String? = null,
+    onRetry: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
 
@@ -94,50 +98,96 @@ fun SeriesLibraryView(
             }
         }
 
-        if (filteredSeries.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "No series match \"$searchQuery\"",
-                    color = Color.Gray,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                items(filteredSeries) { series ->
-                    val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
-                    FocusableItemCard(
-                        title = series.title,
-                        imageUrl = series.posterUrl,
-                        subtitle = series.genre,
-                        isFavorite = isFav,
-                        onFavoriteToggle = if (profile.features.favoritesEnabled) {
-                            {
-                                onToggleFavorite(
-                                    FavoriteEntity(
-                                        contentId = series.id,
-                                        contentType = "SERIES",
-                                        title = series.title,
-                                        posterOrLogo = series.posterUrl,
-                                        streamUrl = "",
-                                        categoryId = series.categoryId,
-                                        categoryName = series.categoryName
-                                    )
-                                )
-                            }
-                        } else null,
-                        onClick = { onSeriesClick(series) }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        ) {
+            if (isLoading && seriesList.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+                }
+            } else if (error != null && seriesList.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onRetry,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(profile.branding.primaryColor)
+                        )
+                    ) {
+                        Text("Retry", color = Color.White)
+                    }
+                }
+            } else if (seriesList.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No series available in this category.",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else if (filteredSeries.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No series match \"$searchQuery\"",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(if (isTv) 160.dp else 120.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(filteredSeries) { series ->
+                        val isFav = favorites.any { it.contentId == series.id && it.contentType == "SERIES" }
+                        FocusableItemCard(
+                            title = series.title,
+                            imageUrl = series.posterUrl,
+                            subtitle = series.genre,
+                            isFavorite = isFav,
+                            onFavoriteToggle = if (profile.features.favoritesEnabled) {
+                                {
+                                    onToggleFavorite(
+                                        FavoriteEntity(
+                                            contentId = series.id,
+                                            contentType = "SERIES",
+                                            title = series.title,
+                                            posterOrLogo = series.posterUrl,
+                                            streamUrl = "",
+                                            categoryId = series.categoryId,
+                                            categoryName = series.categoryName
+                                        )
+                                    )
+                                }
+                            } else null,
+                            onClick = { onSeriesClick(series) }
+                        )
+                    }
                 }
             }
         }

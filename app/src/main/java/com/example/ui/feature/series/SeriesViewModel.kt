@@ -136,14 +136,22 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
             try {
                 repository.getCategories("SERIES").first() // Seed cache
                 val categoryId = _uiState.value.selectedCategoryId
-                val seriesListResult = repository.getSeries(categoryId).first()
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        seriesList = seriesListResult,
-                        error = null
-                    )
+                val originalProviderId = profile.providerId
+                val originalCategoryId = categoryId
+
+                repository.getSeries(categoryId).collect { seriesListResult ->
+                    if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId) {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                seriesList = seriesListResult,
+                                error = null
+                            )
+                        }
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -169,27 +177,36 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
 
     private fun loadSeasons(series: Series) {
         _detailsUiState.update { it.copy(isLoadingSeasons = true, error = null) }
+        loadSeasonsJob?.cancel()
         loadSeasonsJob = viewModelScope.launch {
             try {
                 repository.getSeasons(series.id).collect { fetchedSeasons ->
-                    _detailsUiState.update {
-                        it.copy(
-                            seasons = fetchedSeasons,
-                            isLoadingSeasons = false,
-                            selectedSeason = fetchedSeasons.firstOrNull()
-                        )
-                    }
-                    val firstSeason = fetchedSeasons.firstOrNull()
-                    if (firstSeason != null) {
-                        loadEpisodes(series.id, firstSeason)
+                    val currentDetails = _detailsUiState.value
+                    if (currentDetails.activeSeries?.id == series.id) {
+                        val previousSeason = currentDetails.selectedSeason
+                        val newSelected = fetchedSeasons.find { it.id == previousSeason?.id } ?: fetchedSeasons.firstOrNull()
+                        _detailsUiState.update {
+                            it.copy(
+                                seasons = fetchedSeasons,
+                                isLoadingSeasons = false,
+                                selectedSeason = newSelected
+                            )
+                        }
+                        if (newSelected != null) {
+                            loadEpisodes(series.id, newSelected)
+                        }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _detailsUiState.update {
-                    it.copy(
-                        isLoadingSeasons = false,
-                        error = e.message ?: "Failed to load seasons"
-                    )
+                if (_detailsUiState.value.activeSeries?.id == series.id) {
+                    _detailsUiState.update {
+                        it.copy(
+                            isLoadingSeasons = false,
+                            error = e.message ?: "Failed to load seasons"
+                        )
+                    }
                 }
             }
         }
@@ -209,24 +226,43 @@ class SeriesViewModel(private val repository: IptvRepository) : ViewModel() {
 
     private fun loadEpisodes(seriesId: String, season: Season) {
         _detailsUiState.update { it.copy(isLoadingEpisodes = true, error = null) }
+        loadEpisodesJob?.cancel()
         loadEpisodesJob = viewModelScope.launch {
             try {
                 repository.getEpisodes(seriesId, season.id).collect { fetchedEpisodes ->
+                    val currentDetails = _detailsUiState.value
+                    if (currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
+                        _detailsUiState.update {
+                            it.copy(
+                                episodes = fetchedEpisodes,
+                                isLoadingEpisodes = false
+                            )
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val currentDetails = _detailsUiState.value
+                if (currentDetails.activeSeries?.id == seriesId && currentDetails.selectedSeason?.id == season.id) {
                     _detailsUiState.update {
                         it.copy(
-                            episodes = fetchedEpisodes,
-                            isLoadingEpisodes = false
+                            isLoadingEpisodes = false,
+                            error = e.message ?: "Failed to load episodes"
                         )
                     }
                 }
-            } catch (e: Exception) {
-                _detailsUiState.update {
-                    it.copy(
-                        isLoadingEpisodes = false,
-                        error = e.message ?: "Failed to load episodes"
-                    )
-                }
             }
+        }
+    }
+
+    fun retryDetails() {
+        val series = _detailsUiState.value.activeSeries ?: return
+        val selectedSeason = _detailsUiState.value.selectedSeason
+        if (selectedSeason != null) {
+            loadEpisodes(series.id, selectedSeason)
+        } else {
+            loadSeasons(series)
         }
     }
 }

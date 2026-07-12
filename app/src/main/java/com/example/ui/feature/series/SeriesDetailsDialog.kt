@@ -33,7 +33,8 @@ fun SeriesDetailsDialog(
     profile: ProviderProfile,
     onSelectSeason: (Season) -> Unit,
     onPlayEpisode: (Series, Episode) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onRetry: () -> Unit = {}
 ) {
     val seasons = detailsUiState.seasons
     val episodes = detailsUiState.episodes
@@ -138,12 +139,25 @@ fun SeriesDetailsDialog(
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = error,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(16.dp)
-                                )
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = error,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Button(
+                                        onClick = onRetry,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(profile.branding.primaryColor)
+                                        )
+                                    ) {
+                                        Text("Retry", color = Color.White)
+                                    }
+                                }
                             }
                         }
                     }

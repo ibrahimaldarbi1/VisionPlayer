@@ -72,29 +72,49 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             }
 
             // Observe Categories
-            if (liveCatsJob == null || oldProfile?.providerId != profile.providerId) {
+            if (profile.features.liveTvEnabled) {
+                if (liveCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                    liveCatsJob?.cancel()
+                    liveCatsJob = viewModelScope.launch {
+                        repository.observeVisibleCategories("LIVE").collect { cats ->
+                            liveCategories.value = cats
+                        }
+                    }
+                }
+            } else {
                 liveCatsJob?.cancel()
-                liveCatsJob = viewModelScope.launch {
-                    repository.observeVisibleCategories("LIVE").collect { cats ->
-                        liveCategories.value = cats
+                liveCatsJob = null
+                liveCategories.value = emptyList()
+            }
+
+            if (profile.features.moviesEnabled) {
+                if (movieCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                    movieCatsJob?.cancel()
+                    movieCatsJob = viewModelScope.launch {
+                        repository.observeVisibleCategories("MOVIE").collect { cats ->
+                            movieCategories.value = cats
+                        }
                     }
                 }
-            }
-            if (movieCatsJob == null || oldProfile?.providerId != profile.providerId) {
+            } else {
                 movieCatsJob?.cancel()
-                movieCatsJob = viewModelScope.launch {
-                    repository.observeVisibleCategories("MOVIE").collect { cats ->
-                        movieCategories.value = cats
-                    }
-                }
+                movieCatsJob = null
+                movieCategories.value = emptyList()
             }
-            if (seriesCatsJob == null || oldProfile?.providerId != profile.providerId) {
-                seriesCatsJob?.cancel()
-                seriesCatsJob = viewModelScope.launch {
-                    repository.observeVisibleCategories("SERIES").collect { cats ->
-                        seriesCategories.value = cats
+
+            if (profile.features.seriesEnabled) {
+                if (seriesCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                    seriesCatsJob?.cancel()
+                    seriesCatsJob = viewModelScope.launch {
+                        repository.observeVisibleCategories("SERIES").collect { cats ->
+                            seriesCategories.value = cats
+                        }
                     }
                 }
+            } else {
+                seriesCatsJob?.cancel()
+                seriesCatsJob = null
+                seriesCategories.value = emptyList()
             }
 
             // Combine inputs for search
@@ -169,6 +189,9 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         }
 
         _uiState.update { it.copy(isLoading = true, error = null) }
+        val searchForQuery = input.queryText
+        val searchForProviderId = profile.providerId
+
         searchJob = viewModelScope.launch {
             try {
                 repository.searchContent(
@@ -177,29 +200,35 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
                     profile.features.moviesEnabled,
                     profile.features.seriesEnabled
                 ).collect { results ->
-                    val visibleLiveIds = input.liveCats.map { it.id }.toSet()
-                    val visibleMovieIds = input.movieCats.map { it.id }.toSet()
-                    val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
+                    if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId) {
+                        val visibleLiveIds = input.liveCats.map { it.id }.toSet()
+                        val visibleMovieIds = input.movieCats.map { it.id }.toSet()
+                        val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
 
-                    val filteredResults = results.copy(
-                        liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
-                        movies = results.movies.filter { it.categoryId in visibleMovieIds },
-                        series = results.series.filter { it.categoryId in visibleSeriesIds }
-                    )
-                    _uiState.update {
-                        it.copy(
-                            results = filteredResults,
-                            isLoading = false,
-                            error = null
+                        val filteredResults = results.copy(
+                            liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
+                            movies = results.movies.filter { it.categoryId in visibleMovieIds },
+                            series = results.series.filter { it.categoryId in visibleSeriesIds }
                         )
+                        _uiState.update {
+                            it.copy(
+                                results = filteredResults,
+                                isLoading = false,
+                                error = null
+                            )
+                        }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        error = e.message ?: "Search failed"
-                    )
+                if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = e.message ?: "Search failed"
+                        )
+                    }
                 }
             }
         }

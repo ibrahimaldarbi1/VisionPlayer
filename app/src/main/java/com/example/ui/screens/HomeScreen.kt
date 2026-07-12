@@ -276,6 +276,10 @@ fun HomeScreen(
     val settingsViewModel: com.example.ui.feature.settings.SettingsViewModel = viewModel(factory = settingsViewModelFactory)
     val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
 
+    LaunchedEffect(profile) {
+        settingsViewModel.onProfileChanged(profile)
+    }
+
     // Handle single-shot TMDB events from HomeViewModel
     LaunchedEffect(homeViewModel) {
         homeViewModel.events.collect { event ->
@@ -511,7 +515,9 @@ fun HomeScreen(
                             isTv = isTv,
                             profile = profile,
                             favorites = searchState.favorites,
-                            onToggleFavorite = searchViewModel::toggleFavorite
+                            onToggleFavorite = searchViewModel::toggleFavorite,
+                            isLoading = searchState.isLoading,
+                            error = searchState.error
                         )
                     }
                     AppDestination.SETTINGS -> SettingsView(
@@ -545,7 +551,8 @@ fun HomeScreen(
             profile = profile,
             onSelectSeason = seriesViewModel::selectSeason,
             onPlayEpisode = onPlayEpisode,
-            onDismiss = { seriesViewModel.selectSeries(null) }
+            onDismiss = { seriesViewModel.selectSeries(null) },
+            onRetry = seriesViewModel::retryDetails
         )
     }
 

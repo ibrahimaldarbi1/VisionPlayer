@@ -59,6 +59,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
     val events: SharedFlow<HomeEvent> = _events.asSharedFlow()
 
     private var currentProfile: ProviderProfile? = null
+    private var matchingJob: Job? = null
 
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
@@ -67,6 +68,8 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         if (oldProfile?.providerId != profile.providerId) {
             loadHomeData(profile.providerId)
             _unavailableTmdbItem.value = null
+            matchingJob?.cancel()
+            matchingJob = null
         }
 
         // Handle Favorites subscription
@@ -159,31 +162,48 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
 
     fun onTmdbItemClick(item: HomeItem) {
         val itemTitle = item.title ?: "Untitled"
-        viewModelScope.launch {
-            if (item.mediaType == "tv") {
-                val matched = repository.findMatchingSeries(itemTitle)
-                val decision = TmdbClickDecisionProcessor.processClick(item, null, matched)
-                when (decision) {
-                    is TmdbClickDecisionProcessor.TmdbClickResult.OpenSeries -> {
-                        _events.emit(HomeEvent.OpenSeries(decision.series))
+        val clickedProfile = currentProfile ?: return
+
+        matchingJob?.cancel()
+        matchingJob = viewModelScope.launch {
+            try {
+                if (item.mediaType == "tv") {
+                    if (!clickedProfile.features.seriesEnabled || currentProfile?.features?.seriesEnabled != true) return@launch
+                    val matched = repository.findMatchingSeries(itemTitle)
+                    
+                    if (currentProfile?.providerId == clickedProfile.providerId && currentProfile?.features?.seriesEnabled == true) {
+                        val decision = TmdbClickDecisionProcessor.processClick(item, null, matched)
+                        when (decision) {
+                            is TmdbClickDecisionProcessor.TmdbClickResult.OpenSeries -> {
+                                _events.emit(HomeEvent.OpenSeries(decision.series))
+                            }
+                            is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
+                                _unavailableTmdbItem.value = decision.item
+                            }
+                            else -> {}
+                        }
                     }
-                    is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
-                        _unavailableTmdbItem.value = decision.item
+                } else {
+                    if (!clickedProfile.features.moviesEnabled || currentProfile?.features?.moviesEnabled != true) return@launch
+                    val matched = repository.findMatchingMovie(itemTitle)
+                    
+                    if (currentProfile?.providerId == clickedProfile.providerId && currentProfile?.features?.moviesEnabled == true) {
+                        val decision = TmdbClickDecisionProcessor.processClick(item, matched, null)
+                        when (decision) {
+                            is TmdbClickDecisionProcessor.TmdbClickResult.PlayMovie -> {
+                                _events.emit(HomeEvent.PlayMovie(decision.movie))
+                            }
+                            is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
+                                _unavailableTmdbItem.value = decision.item
+                            }
+                            else -> {}
+                        }
                     }
-                    else -> {}
                 }
-            } else {
-                val matched = repository.findMatchingMovie(itemTitle)
-                val decision = TmdbClickDecisionProcessor.processClick(item, matched, null)
-                when (decision) {
-                    is TmdbClickDecisionProcessor.TmdbClickResult.PlayMovie -> {
-                        _events.emit(HomeEvent.PlayMovie(decision.movie))
-                    }
-                    is TmdbClickDecisionProcessor.TmdbClickResult.Unavailable -> {
-                        _unavailableTmdbItem.value = decision.item
-                    }
-                    else -> {}
-                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Ignore matching errors cleanly
             }
         }
     }

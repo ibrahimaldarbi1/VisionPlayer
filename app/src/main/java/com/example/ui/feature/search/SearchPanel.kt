@@ -29,7 +29,9 @@ fun SearchPanel(
     isTv: Boolean,
     profile: com.example.config.ProviderProfile,
     favorites: List<FavoriteEntity> = emptyList(),
-    onToggleFavorite: (FavoriteEntity) -> Unit = {}
+    onToggleFavorite: (FavoriteEntity) -> Unit = {},
+    isLoading: Boolean = false,
+    error: String? = null
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
@@ -51,6 +53,14 @@ fun SearchPanel(
         if (query.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Enter a keyword to lookup active content", color = Color.Gray)
+            }
+        } else if (isLoading && results.liveChannels.isEmpty() && results.movies.isEmpty() && results.series.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color(profile.branding.primaryColor))
+            }
+        } else if (error != null && results.liveChannels.isEmpty() && results.movies.isEmpty() && results.series.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(text = error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
             }
         } else if (results.liveChannels.isEmpty() && results.movies.isEmpty() && results.series.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

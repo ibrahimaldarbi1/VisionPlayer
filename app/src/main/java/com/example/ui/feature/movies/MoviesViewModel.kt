@@ -116,14 +116,22 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
             try {
                 repository.getCategories("MOVIE").first() // Seed cache
                 val categoryId = _uiState.value.selectedCategoryId
-                val moviesList = repository.getMovies(categoryId).first()
-                _uiState.update {
-                    it.copy(
-                        isLoading = false,
-                        movies = moviesList,
-                        error = null
-                    )
+                val originalProviderId = profile.providerId
+                val originalCategoryId = categoryId
+
+                repository.getMovies(categoryId).collect { moviesList ->
+                    if (currentProfile?.providerId == originalProviderId && _uiState.value.selectedCategoryId == originalCategoryId) {
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                movies = moviesList,
+                                error = null
+                            )
+                        }
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(

@@ -51,11 +51,7 @@ fun SettingsView(
 
     val redactedServer = remember(uiState.activeSession) {
         val url = uiState.activeSession?.serverUrl
-        if (url.isNullOrBlank()) {
-            "demo.iptvserver.net"
-        } else {
-            com.example.core.redaction.SensitiveDataRedactor.redactUrl(url)
-        }
+        com.example.core.redaction.AccountHostHelper.formatRedactedHost(url)
     }
 
     if (uiState.subScreen == "CATEGORY_MANAGEMENT") {

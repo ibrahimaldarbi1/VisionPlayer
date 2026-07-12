@@ -36,7 +36,7 @@ class IptvRepository(
     }
 
     private fun isDemoSession(session: SessionEntity): Boolean {
-        return session.username == "demo_user" || session.username == "demo" || session.serverUrl.contains("demo") || session.serverUrl.isBlank()
+        return com.example.config.DemoPolicy.isDemoSession(session.username, session.serverUrl)
     }
 
     // --- Session / Authentication ---
@@ -53,7 +53,7 @@ class IptvRepository(
             return@withContext Result.failure(IllegalArgumentException("Invalid Server URL format. Must start with http:// or https://"))
         }
 
-        val isDemo = username == "demo_user" || username == "demo" || cleanServerUrl.contains("demo")
+        val isDemo = com.example.config.DemoPolicy.isDemoSession(username, cleanServerUrl)
         var expiryDate = "2028-12-31 (Active)"
         var status = "Active"
         var maxConnections = 4
@@ -181,30 +181,32 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val remote = xtreamApiClient.fetchXtreamCategories(session, type)
-                    if (remote.isNotEmpty()) {
-                        val entities = remote.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
-                        dao.clearCategoriesByType(type)
-                        dao.upsertCategories(entities)
-                        
-                        val newCached = dao.observeCategories(type).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val remote = xtreamApiClient.fetchXtreamCategories(session, type)
+                        if (remote.isNotEmpty()) {
+                            val entities = remote.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
+                            dao.clearCategoriesByType(type)
+                            dao.upsertCategories(entities)
+                            
+                            val newCached = dao.observeCategories(type).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote categories")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote categories")
+                } else if (isDemoSession(session)) {
+                    // Demo / mock setup
+                    val demo = IptvMockData.Categories.filter { it.type == type }
+                    val entities = demo.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
+                    dao.clearCategoriesByType(type)
+                    dao.upsertCategories(entities)
+                    emit(demo)
+                    return@flow
                 }
-            } else {
-                // Demo / mock setup
-                val demo = IptvMockData.Categories.filter { it.type == type }
-                val entities = demo.mapIndexed { index, cat -> cat.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
-                dao.clearCategoriesByType(type)
-                dao.upsertCategories(entities)
-                emit(demo)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -258,36 +260,38 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
-                        .getString("stream_format", "TS") ?: "TS"
-                    val remote = xtreamApiClient.fetchXtreamLiveChannels(session, cleanCategoryId, format)
-                    if (remote.isNotEmpty()) {
-                        val entities = remote.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
-                        dao.clearLiveChannels(cleanCategoryId)
-                        dao.upsertLiveChannels(entities)
-                        
-                        val newCached = dao.observeLiveChannels(cleanCategoryId).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val format = context.getSharedPreferences("iptv_settings", Context.MODE_PRIVATE)
+                            .getString("stream_format", "TS") ?: "TS"
+                        val remote = xtreamApiClient.fetchXtreamLiveChannels(session, cleanCategoryId, format)
+                        if (remote.isNotEmpty()) {
+                            val entities = remote.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
+                            dao.clearLiveChannels(cleanCategoryId)
+                            dao.upsertLiveChannels(entities)
+                            
+                            val newCached = dao.observeLiveChannels(cleanCategoryId).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote live channels")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote live channels")
+                } else if (isDemoSession(session)) {
+                    // Demo setup
+                    val demo = if (cleanCategoryId == null) {
+                        IptvMockData.LiveChannels
+                    } else {
+                        IptvMockData.LiveChannels.filter { it.categoryId == cleanCategoryId }
+                    }
+                    val entities = demo.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
+                    dao.clearLiveChannels(cleanCategoryId)
+                    dao.upsertLiveChannels(entities)
+                    emit(demo)
+                    return@flow
                 }
-            } else {
-                // Demo setup
-                val demo = if (cleanCategoryId == null) {
-                    IptvMockData.LiveChannels
-                } else {
-                    IptvMockData.LiveChannels.filter { it.categoryId == cleanCategoryId }
-                }
-                val entities = demo.mapIndexed { index, channel -> channel.toEntity(sortOrder = index, updatedAt = System.currentTimeMillis()) }
-                dao.clearLiveChannels(cleanCategoryId)
-                dao.upsertLiveChannels(entities)
-                emit(demo)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -310,44 +314,46 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val remote = xtreamApiClient.fetchXtreamMovies(session, cleanCategoryId)
-                    if (remote.isNotEmpty()) {
-                        val entities = remote.map { movie ->
-                            movie.toEntity(
-                                normalizedTitle = normalizeTitle(movie.title),
-                                updatedAt = System.currentTimeMillis()
-                            )
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val remote = xtreamApiClient.fetchXtreamMovies(session, cleanCategoryId)
+                        if (remote.isNotEmpty()) {
+                            val entities = remote.map { movie ->
+                                movie.toEntity(
+                                    normalizedTitle = normalizeTitle(movie.title),
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            }
+                            dao.clearMovies(cleanCategoryId)
+                            dao.upsertMovies(entities)
+    
+                            val newCached = dao.observeMovies(cleanCategoryId, limit = 5000, offset = 0).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
                         }
-                        dao.clearMovies(cleanCategoryId)
-                        dao.upsertMovies(entities)
-
-                        val newCached = dao.observeMovies(cleanCategoryId, limit = 5000, offset = 0).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote movies")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote movies")
+                } else if (isDemoSession(session)) {
+                    // Demo setup
+                    val demo = if (cleanCategoryId == null) {
+                        IptvMockData.Movies
+                    } else {
+                        IptvMockData.Movies.filter { it.categoryId == cleanCategoryId }
+                    }
+                    val entities = demo.map { movie ->
+                        movie.toEntity(
+                            normalizedTitle = normalizeTitle(movie.title),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                    dao.clearMovies(cleanCategoryId)
+                    dao.upsertMovies(entities)
+                    emit(demo)
+                    return@flow
                 }
-            } else {
-                // Demo setup
-                val demo = if (cleanCategoryId == null) {
-                    IptvMockData.Movies
-                } else {
-                    IptvMockData.Movies.filter { it.categoryId == cleanCategoryId }
-                }
-                val entities = demo.map { movie ->
-                    movie.toEntity(
-                        normalizedTitle = normalizeTitle(movie.title),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-                dao.clearMovies(cleanCategoryId)
-                dao.upsertMovies(entities)
-                emit(demo)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -370,44 +376,46 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val remote = xtreamApiClient.fetchXtreamSeries(session, cleanCategoryId)
-                    if (remote.isNotEmpty()) {
-                        val entities = remote.map { series ->
-                            series.toEntity(
-                                normalizedTitle = normalizeTitle(series.title),
-                                updatedAt = System.currentTimeMillis()
-                            )
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val remote = xtreamApiClient.fetchXtreamSeries(session, cleanCategoryId)
+                        if (remote.isNotEmpty()) {
+                            val entities = remote.map { series ->
+                                series.toEntity(
+                                    normalizedTitle = normalizeTitle(series.title),
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            }
+                            dao.clearSeries(cleanCategoryId)
+                            dao.upsertSeries(entities)
+    
+                            val newCached = dao.observeSeries(cleanCategoryId, limit = 5000, offset = 0).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
                         }
-                        dao.clearSeries(cleanCategoryId)
-                        dao.upsertSeries(entities)
-
-                        val newCached = dao.observeSeries(cleanCategoryId, limit = 5000, offset = 0).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote series")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote series")
+                } else if (isDemoSession(session)) {
+                    // Demo setup
+                    val demo = if (cleanCategoryId == null) {
+                        IptvMockData.SeriesList
+                    } else {
+                        IptvMockData.SeriesList.filter { it.categoryId == cleanCategoryId }
+                    }
+                    val entities = demo.map { series ->
+                        series.toEntity(
+                            normalizedTitle = normalizeTitle(series.title),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                    dao.clearSeries(cleanCategoryId)
+                    dao.upsertSeries(entities)
+                    emit(demo)
+                    return@flow
                 }
-            } else {
-                // Demo setup
-                val demo = if (cleanCategoryId == null) {
-                    IptvMockData.SeriesList
-                } else {
-                    IptvMockData.SeriesList.filter { it.categoryId == cleanCategoryId }
-                }
-                val entities = demo.map { series ->
-                    series.toEntity(
-                        normalizedTitle = normalizeTitle(series.title),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-                dao.clearSeries(cleanCategoryId)
-                dao.upsertSeries(entities)
-                emit(demo)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -424,95 +432,97 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val remoteSeasons = xtreamApiClient.fetchXtreamSeasons(session, seriesId)
-                    if (remoteSeasons.isNotEmpty()) {
-                        val seasonEntities = remoteSeasons.map { it.toEntity(updatedAt = System.currentTimeMillis()) }
-                        dao.clearSeasons(seriesId)
-                        dao.upsertSeasons(seasonEntities)
-
-                        // Fetch and cache episodes for this series automatically as well!
-                        val allEpisodes = mutableListOf<Episode>()
-                        remoteSeasons.forEach { season ->
-                            val remoteEpisodes = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, season.id)
-                            allEpisodes.addAll(remoteEpisodes)
-                        }
-                        if (allEpisodes.isNotEmpty()) {
-                            val episodeEntities = allEpisodes.map { ep ->
-                                ep.toEntity(
-                                    normalizedTitle = normalizeTitle(ep.title),
-                                    updatedAt = System.currentTimeMillis()
-                                )
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val remoteSeasons = xtreamApiClient.fetchXtreamSeasons(session, seriesId)
+                        if (remoteSeasons.isNotEmpty()) {
+                            val seasonEntities = remoteSeasons.map { it.toEntity(updatedAt = System.currentTimeMillis()) }
+                            dao.clearSeasons(seriesId)
+                            dao.upsertSeasons(seasonEntities)
+    
+                            // Fetch and cache episodes for this series automatically as well!
+                            val allEpisodes = mutableListOf<Episode>()
+                            remoteSeasons.forEach { season ->
+                                val remoteEpisodes = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, season.id)
+                                allEpisodes.addAll(remoteEpisodes)
                             }
-                            dao.clearEpisodes(seriesId)
-                            dao.upsertEpisodes(episodeEntities)
+                            if (allEpisodes.isNotEmpty()) {
+                                val episodeEntities = allEpisodes.map { ep ->
+                                    ep.toEntity(
+                                        normalizedTitle = normalizeTitle(ep.title),
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                }
+                                dao.clearEpisodes(seriesId)
+                                dao.upsertEpisodes(episodeEntities)
+                            }
+    
+                            val newCached = dao.observeSeasons(seriesId).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
                         }
-
-                        val newCached = dao.observeSeasons(seriesId).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote seasons/episodes")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote seasons/episodes")
-                }
-            } else {
-                // Demo setup
-                val demoSeasons = IptvMockData.Seasons.filter { it.seriesId == seriesId }
-                val seasons = if (demoSeasons.isEmpty()) {
-                    listOf(Season(id = "${seriesId}_s1", seriesId = seriesId, seasonNumber = 1, title = "Season 1"))
-                } else {
-                    demoSeasons
-                }
-                val seasonEntities = seasons.map { it.toEntity(updatedAt = System.currentTimeMillis()) }
-                dao.clearSeasons(seriesId)
-                dao.upsertSeasons(seasonEntities)
-
-                val allDemoEpisodes = mutableListOf<Episode>()
-                seasons.forEach { season ->
-                    val demoEpisodes = IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == season.id }
-                    val eps = if (demoEpisodes.isEmpty()) {
-                        listOf(
-                            Episode(
-                                id = "${seriesId}_e1",
-                                seriesId = seriesId,
-                                seasonId = season.id,
-                                seasonNumber = season.seasonNumber,
-                                episodeNumber = 1,
-                                title = "Episode 1: Pilot",
-                                streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-                                description = "Introduction to the trending series.",
-                                duration = "45m"
-                            ),
-                            Episode(
-                                id = "${seriesId}_e2",
-                                seriesId = seriesId,
-                                seasonId = season.id,
-                                seasonNumber = season.seasonNumber,
-                                episodeNumber = 2,
-                                title = "Episode 2: The Rising",
-                                streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-                                description = "The journey continues with unexpected turns.",
-                                duration = "45m"
-                            )
-                        )
+                } else if (isDemoSession(session)) {
+                    // Demo setup
+                    val demoSeasons = IptvMockData.Seasons.filter { it.seriesId == seriesId }
+                    val seasons = if (demoSeasons.isEmpty()) {
+                        listOf(Season(id = "${seriesId}_s1", seriesId = seriesId, seasonNumber = 1, title = "Season 1"))
                     } else {
-                        demoEpisodes
+                        demoSeasons
                     }
-                    allDemoEpisodes.addAll(eps)
+                    val seasonEntities = seasons.map { it.toEntity(updatedAt = System.currentTimeMillis()) }
+                    dao.clearSeasons(seriesId)
+                    dao.upsertSeasons(seasonEntities)
+    
+                    val allDemoEpisodes = mutableListOf<Episode>()
+                    seasons.forEach { season ->
+                        val demoEpisodes = IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == season.id }
+                        val eps = if (demoEpisodes.isEmpty()) {
+                            listOf(
+                                Episode(
+                                    id = "${seriesId}_e1",
+                                    seriesId = seriesId,
+                                    seasonId = season.id,
+                                    seasonNumber = season.seasonNumber,
+                                    episodeNumber = 1,
+                                    title = "Episode 1: Pilot",
+                                    streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                                    description = "Introduction to the trending series.",
+                                    duration = "45m"
+                                ),
+                                Episode(
+                                    id = "${seriesId}_e2",
+                                    seriesId = seriesId,
+                                    seasonId = season.id,
+                                    seasonNumber = season.seasonNumber,
+                                    episodeNumber = 2,
+                                    title = "Episode 2: The Rising",
+                                    streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+                                    description = "The journey continues with unexpected turns.",
+                                    duration = "45m"
+                                )
+                            )
+                        } else {
+                            demoEpisodes
+                        }
+                        allDemoEpisodes.addAll(eps)
+                    }
+                    val epEntities = allDemoEpisodes.map { ep ->
+                        ep.toEntity(
+                            normalizedTitle = normalizeTitle(ep.title),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                    dao.clearEpisodes(seriesId)
+                    dao.upsertEpisodes(epEntities)
+    
+                    emit(seasons)
+                    return@flow
                 }
-                val epEntities = allDemoEpisodes.map { ep ->
-                    ep.toEntity(
-                        normalizedTitle = normalizeTitle(ep.title),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-                dao.clearEpisodes(seriesId)
-                dao.upsertEpisodes(epEntities)
-
-                emit(seasons)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -531,66 +541,68 @@ class IptvRepository(
 
         if (cached.isEmpty() || isStale) {
             val session = dao.getSessionDirect()
-            if (session != null && !isDemoSession(session)) {
-                try {
-                    val remote = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, seasonId)
-                    if (remote.isNotEmpty()) {
-                        val entities = remote.map { ep ->
-                            ep.toEntity(
-                                normalizedTitle = normalizeTitle(ep.title),
-                                updatedAt = System.currentTimeMillis()
-                            )
+            if (session != null) {
+                if (!isDemoSession(session)) {
+                    try {
+                        val remote = xtreamApiClient.fetchXtreamEpisodes(session, seriesId, seasonId)
+                        if (remote.isNotEmpty()) {
+                            val entities = remote.map { ep ->
+                                ep.toEntity(
+                                    normalizedTitle = normalizeTitle(ep.title),
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            }
+                            dao.upsertEpisodes(entities)
+    
+                            val newCached = dao.observeEpisodes(seriesId, seasonNum).firstOrNull() ?: emptyList()
+                            emit(newCached.map { it.toDomain() })
+                            return@flow
                         }
-                        dao.upsertEpisodes(entities)
-
-                        val newCached = dao.observeEpisodes(seriesId, seasonNum).firstOrNull() ?: emptyList()
-                        emit(newCached.map { it.toDomain() })
-                        return@flow
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("IptvRepository", "Failed to sync remote episodes")
                     }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    android.util.Log.e("IptvRepository", "Failed to sync remote episodes")
-                }
-            } else {
-                // Demo
-                val demoEpisodes = IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == seasonId }
-                val eps = if (demoEpisodes.isEmpty()) {
-                    listOf(
-                        Episode(
-                            id = "${seriesId}_e1",
-                            seriesId = seriesId,
-                            seasonId = seasonId,
-                            seasonNumber = seasonNum,
-                            episodeNumber = 1,
-                            title = "Episode 1: Pilot",
-                            streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-                            description = "Introduction to the trending series.",
-                            duration = "45m"
-                        ),
-                        Episode(
-                            id = "${seriesId}_e2",
-                            seriesId = seriesId,
-                            seasonId = seasonId,
-                            seasonNumber = seasonNum,
-                            episodeNumber = 2,
-                            title = "Episode 2: The Rising",
-                            streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-                            description = "The journey continues with unexpected turns.",
-                            duration = "45m"
+                } else if (isDemoSession(session)) {
+                    // Demo
+                    val demoEpisodes = IptvMockData.Episodes.filter { it.seriesId == seriesId && it.seasonId == seasonId }
+                    val eps = if (demoEpisodes.isEmpty()) {
+                        listOf(
+                            Episode(
+                                id = "${seriesId}_e1",
+                                seriesId = seriesId,
+                                seasonId = seasonId,
+                                seasonNumber = seasonNum,
+                                episodeNumber = 1,
+                                title = "Episode 1: Pilot",
+                                streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+                                description = "Introduction to the trending series.",
+                                duration = "45m"
+                            ),
+                            Episode(
+                                id = "${seriesId}_e2",
+                                seriesId = seriesId,
+                                seasonId = seasonId,
+                                seasonNumber = seasonNum,
+                                episodeNumber = 2,
+                                title = "Episode 2: The Rising",
+                                streamUrl = "https://storage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
+                                description = "The journey continues with unexpected turns.",
+                                duration = "45m"
+                            )
                         )
-                    )
-                } else {
-                    demoEpisodes
+                    } else {
+                        demoEpisodes
+                    }
+                    val entities = eps.map { ep ->
+                        ep.toEntity(
+                            normalizedTitle = normalizeTitle(ep.title),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                    dao.upsertEpisodes(entities)
+                    emit(eps)
+                    return@flow
                 }
-                val entities = eps.map { ep ->
-                    ep.toEntity(
-                        normalizedTitle = normalizeTitle(ep.title),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                }
-                dao.upsertEpisodes(entities)
-                emit(eps)
-                return@flow
             }
         }
     }.flowOn(Dispatchers.IO)

@@ -21,6 +21,7 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("Boolean", "DEBUG_DEMO_MODE_ENABLED", "false")
   }
 
   signingConfigs {
@@ -45,9 +46,11 @@ android {
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
+      buildConfigField("Boolean", "DEBUG_DEMO_MODE_ENABLED", "false")
     }
     debug {
       signingConfig = signingConfigs.getByName("debugConfig")
+      buildConfigField("Boolean", "DEBUG_DEMO_MODE_ENABLED", "true")
     }
   }
   compileOptions {

@@ -34,9 +34,10 @@ fun LoginScreen(
     val profile = ProviderConfigRegistry.currentProfile
     val coroutineScope = rememberCoroutineScope()
 
-    var serverUrl by remember { mutableStateOf("https://demo.iptvserver.net") }
-    var username by remember { mutableStateOf("demo_user") }
-    var password by remember { mutableStateOf("demo_pass") }
+    val showDemoPrefills = com.example.config.DemoPolicy.isDemoModeAllowed
+    var serverUrl by remember { mutableStateOf(if (showDemoPrefills) "https://demo.iptvserver.net" else "") }
+    var username by remember { mutableStateOf(if (showDemoPrefills) "demo_user" else "") }
+    var password by remember { mutableStateOf(if (showDemoPrefills) "demo_pass" else "") }
     var rememberMe by remember { mutableStateOf(true) }
     
     var isPasswordVisible by remember { mutableStateOf(false) }

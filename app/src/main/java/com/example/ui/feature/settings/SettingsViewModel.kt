@@ -26,12 +26,22 @@ data class SettingsUiState(
 
 class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
 
+    private data class CategoryOpIdentity(
+        val profileId: String,
+        val providerId: String,
+        val tab: String,
+        val generation: Int
+    )
+
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     private var observeCategoriesJob: Job? = null
+    private var epgRefreshJob: Job? = null
+    private var categoryOpJob: Job? = null
     private var currentProfile: ProviderProfile? = null
     private var activeOperationsCount = 0
+    private var opGeneration = 0
 
     init {
         viewModelScope.launch {
@@ -41,9 +51,21 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         }
     }
 
+    private fun clearCategoryOperations() {
+        categoryOpJob?.cancel()
+        opGeneration++
+        activeOperationsCount = 0
+        _uiState.update { it.copy(isCategoryOperating = false, categoryError = null, categories = emptyList()) }
+    }
+
     fun onProfileChanged(profile: ProviderProfile) {
         val oldProfile = currentProfile
         currentProfile = profile
+
+        if (oldProfile?.id != profile.id || oldProfile.providerId != profile.providerId) {
+            epgRefreshJob?.cancel()
+            _uiState.update { it.copy(isRefreshingCache = false) }
+        }
 
         // 1. Ensure category management selects an enabled content tab after profile features change.
         val enabledTabs = mutableListOf<String>()
@@ -57,14 +79,21 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
             _uiState.update { it.copy(selectedTab = newTab) }
         }
         
-        if (enabledTabs.isEmpty() && _uiState.value.subScreen == "CATEGORY_MANAGEMENT") {
-            setSubScreen(null)
+        if (enabledTabs.isEmpty()) {
+            if (_uiState.value.subScreen == "CATEGORY_MANAGEMENT") {
+                setSubScreen(null)
+            }
+            clearCategoryOperations()
             return
         }
 
         // 2. If the subScreen is category management, update our observations
         if (_uiState.value.subScreen == "CATEGORY_MANAGEMENT") {
-            observeCategories()
+            if (isTabEnabled(_uiState.value.selectedTab)) {
+                observeCategories()
+            } else {
+                clearCategoryOperations()
+            }
         }
     }
 
@@ -73,16 +102,26 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     fun setSubScreen(screen: String?) {
-        _uiState.update { it.copy(subScreen = screen) }
         if (screen == "CATEGORY_MANAGEMENT") {
+            val profile = currentProfile ?: return
+            val enabledTabs = mutableListOf<String>()
+            if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "LIVE")) enabledTabs.add("LIVE")
+            if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "MOVIE")) enabledTabs.add("MOVIE")
+            if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "SERIES")) enabledTabs.add("SERIES")
+            if (enabledTabs.isEmpty()) return
+            
+            _uiState.update { it.copy(subScreen = screen) }
             observeCategories()
         } else {
+            _uiState.update { it.copy(subScreen = screen) }
             observeCategoriesJob?.cancel()
             observeCategoriesJob = null
+            clearCategoryOperations()
         }
     }
 
     fun selectTab(tab: String) {
+        if (!isTabEnabled(tab)) return
         _uiState.update { it.copy(selectedTab = tab) }
         observeCategories()
     }
@@ -117,12 +156,19 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     fun refreshCache() {
         val profile = currentProfile ?: return
         if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(profile.features)) return
+        val currentIdentity = CategoryOpIdentity(profile.id, profile.providerId, "", 0)
         _uiState.update { it.copy(isRefreshingCache = true) }
-        viewModelScope.launch {
+        epgRefreshJob?.cancel()
+        epgRefreshJob = viewModelScope.launch {
             try {
+                val latestProfile = currentProfile ?: return@launch
+                if (latestProfile.id != currentIdentity.profileId || latestProfile.providerId != currentIdentity.providerId || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(latestProfile.features)) return@launch
                 repository.refreshEpg()
             } finally {
-                _uiState.update { it.copy(isRefreshingCache = false) }
+                val latestProfile = currentProfile
+                if (latestProfile != null && latestProfile.id == currentIdentity.profileId && latestProfile.providerId == currentIdentity.providerId) {
+                    _uiState.update { it.copy(isRefreshingCache = false) }
+                }
             }
         }
     }
@@ -140,66 +186,104 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         }
     }
 
+    private fun getOpIdentity(tab: String): CategoryOpIdentity? {
+        val profile = currentProfile ?: return null
+        return CategoryOpIdentity(profile.id, profile.providerId, tab, opGeneration)
+    }
+
+    private fun isOpValid(identity: CategoryOpIdentity): Boolean {
+        val profile = currentProfile ?: return false
+        if (profile.id != identity.profileId || profile.providerId != identity.providerId) return false
+        if (_uiState.value.selectedTab != identity.tab) return false
+        if (_uiState.value.subScreen != "CATEGORY_MANAGEMENT") return false
+        if (opGeneration != identity.generation) return false
+        return isTabEnabled(identity.tab)
+    }
+
     fun reorderCategories(listIds: List<String>) {
         val tab = _uiState.value.selectedTab
-        if (!isTabEnabled(tab)) return
+        val identity = getOpIdentity(tab) ?: return
+        if (!isOpValid(identity)) return
+        
         startOperation()
-        viewModelScope.launch {
+        categoryOpJob = viewModelScope.launch {
             try {
-                if (!isTabEnabled(tab)) return@launch
+                if (!isOpValid(identity)) return@launch
                 repository.updateCategorySortOrder(tab, listIds)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(categoryError = e.message) }
+                if (isOpValid(identity)) {
+                    _uiState.update { it.copy(categoryError = e.message) }
+                }
             } finally {
-                endOperation()
+                if (isOpValid(identity)) endOperation()
             }
         }
     }
 
     fun setCategoryPinned(categoryId: String, pinned: Boolean) {
         val tab = _uiState.value.selectedTab
-        if (!isTabEnabled(tab)) return
+        val identity = getOpIdentity(tab) ?: return
+        if (!isOpValid(identity)) return
+        
         startOperation()
-        viewModelScope.launch {
+        categoryOpJob = viewModelScope.launch {
             try {
-                if (!isTabEnabled(tab)) return@launch
+                if (!isOpValid(identity)) return@launch
                 repository.setCategoryPinned(tab, categoryId, pinned)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(categoryError = e.message) }
+                if (isOpValid(identity)) {
+                    _uiState.update { it.copy(categoryError = e.message) }
+                }
             } finally {
-                endOperation()
+                if (isOpValid(identity)) endOperation()
             }
         }
     }
 
     fun setCategoryHidden(categoryId: String, hidden: Boolean) {
         val tab = _uiState.value.selectedTab
-        if (!isTabEnabled(tab)) return
+        val identity = getOpIdentity(tab) ?: return
+        if (!isOpValid(identity)) return
+        
         startOperation()
-        viewModelScope.launch {
+        categoryOpJob = viewModelScope.launch {
             try {
-                if (!isTabEnabled(tab)) return@launch
+                if (!isOpValid(identity)) return@launch
                 repository.setCategoryHidden(tab, categoryId, hidden)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(categoryError = e.message) }
+                if (isOpValid(identity)) {
+                    _uiState.update { it.copy(categoryError = e.message) }
+                }
             } finally {
-                endOperation()
+                if (isOpValid(identity)) endOperation()
             }
         }
     }
 
     fun resetCategoryCustomization() {
         val tab = _uiState.value.selectedTab
-        if (!isTabEnabled(tab)) return
+        val identity = getOpIdentity(tab) ?: return
+        if (!isOpValid(identity)) return
+        
         startOperation()
-        viewModelScope.launch {
+        categoryOpJob = viewModelScope.launch {
             try {
-                if (!isTabEnabled(tab)) return@launch
+                if (!isOpValid(identity)) return@launch
                 repository.resetCategoryCustomization(tab)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(categoryError = e.message) }
+                if (isOpValid(identity)) {
+                    _uiState.update { it.copy(categoryError = e.message) }
+                }
             } finally {
-                endOperation()
+                if (isOpValid(identity)) endOperation()
             }
         }
     }

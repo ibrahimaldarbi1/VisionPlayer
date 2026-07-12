@@ -35,6 +35,12 @@ data class PlaybackItem(
     val initialPositionMs: Long = 0L
 )
 
+data class ProfileRequestIdentity(
+    val profileId: String,
+    val providerId: String,
+    val features: com.example.config.FeatureConfig
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,11 +54,27 @@ class MainActivity : ComponentActivity() {
             
             // Outer state observer to reconstruct the entire application theme & layouts dynamically on profiles switch!
             var appProfileState by remember { mutableStateOf(currentProfile) }
+            val profileIdentity = remember(appProfileState) {
+                ProfileRequestIdentity(appProfileState.id, appProfileState.providerId, appProfileState.features)
+            }
 
             // Active Fullscreen Player Item State
             var activePlaybackItem by remember { mutableStateOf<PlaybackItem?>(null) }
             var globalAddToMultiViewChannel by remember { mutableStateOf<LiveChannel?>(null) }
             val coroutineScope = rememberCoroutineScope()
+            
+            var playbackEntryJob: kotlinx.coroutines.Job? by remember { mutableStateOf(null) }
+            var recentlyWatchedJob: kotlinx.coroutines.Job? by remember { mutableStateOf(null) }
+            var continueWatchingJob: kotlinx.coroutines.Job? by remember { mutableStateOf(null) }
+            
+            LaunchedEffect(profileIdentity) {
+                playbackEntryJob?.cancel()
+                recentlyWatchedJob?.cancel()
+                continueWatchingJob?.cancel()
+                playbackEntryJob = null
+                recentlyWatchedJob = null
+                continueWatchingJob = null
+            }
 
             MyApplicationTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -107,23 +129,25 @@ class MainActivity : ComponentActivity() {
                                 addToMultiViewChannel = globalAddToMultiViewChannel,
                                 onAddToMultiViewHandled = { globalAddToMultiViewChannel = null },
                                 onPlayLive = { channel ->
-                                    val currentProfile = appProfileState
-                                    if (!FeatureAvailabilityPolicy.canPlayLive(currentProfile.features)) return@HomeScreen
+                                    val currentIdentity = profileIdentity
+                                    if (!FeatureAvailabilityPolicy.canPlayLive(currentIdentity.features)) return@HomeScreen
                                     
                                     // Save Recently Watched for Live channel
-                                    coroutineScope.launch {
-                                        val latestProfile = com.example.config.ProviderConfigRegistry.currentProfile
-                                        if (latestProfile.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(latestProfile.features)) {
-                                            repository.saveRecentlyWatched(
-                                                RecentlyWatchedEntity(
-                                                    contentId = channel.id,
-                                                    contentType = "LIVE",
-                                                    title = channel.name,
-                                                    posterOrLogo = channel.logoUrl,
-                                                    streamUrl = channel.streamUrl,
-                                                    categoryName = channel.categoryName
+                                    recentlyWatchedJob?.cancel()
+                                    if (FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(currentIdentity.features)) {
+                                        recentlyWatchedJob = coroutineScope.launch {
+                                            if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(profileIdentity.features)) {
+                                                repository.saveRecentlyWatched(
+                                                    RecentlyWatchedEntity(
+                                                        contentId = channel.id,
+                                                        contentType = "LIVE",
+                                                        title = channel.name,
+                                                        posterOrLogo = channel.logoUrl,
+                                                        streamUrl = channel.streamUrl,
+                                                        categoryName = channel.categoryName
+                                                    )
                                                 )
-                                            )
+                                            }
                                         }
                                     }
                                     activePlaybackItem = PlaybackItem(
@@ -136,21 +160,19 @@ class MainActivity : ComponentActivity() {
                                     )
                                 },
                                 onPlayMovie = { movie ->
-                                    val currentProfile = appProfileState
-                                    if (!FeatureAvailabilityPolicy.canPlayMovie(currentProfile.features)) return@HomeScreen
+                                    val currentIdentity = profileIdentity
+                                    if (!FeatureAvailabilityPolicy.canPlayMovie(currentIdentity.features)) return@HomeScreen
                                     
-                                    // Check if movie progress already exists to resume it
-                                    coroutineScope.launch {
+                                    playbackEntryJob?.cancel()
+                                    playbackEntryJob = coroutineScope.launch {
                                         var startPos = 0L
-                                        val profileBeforeRead = com.example.config.ProviderConfigRegistry.currentProfile
-                                        if (profileBeforeRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canReadContinueWatching(profileBeforeRead.features, "MOVIE")) {
+                                        if (FeatureAvailabilityPolicy.canReadContinueWatching(currentIdentity.features, "MOVIE")) {
                                             val existing = repository.continueWatching.first()
                                             val progress = existing.firstOrNull { it.contentId == movie.id }
                                             startPos = progress?.positionMs ?: 0L
                                         }
                                         
-                                        val profileAfterRead = com.example.config.ProviderConfigRegistry.currentProfile
-                                        if (profileAfterRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canPlayMovie(profileAfterRead.features)) {
+                                        if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.canPlayMovie(profileIdentity.features)) {
                                             activePlaybackItem = PlaybackItem(
                                                 streamUrl = movie.streamUrl,
                                                 title = movie.title,
@@ -164,21 +186,19 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onPlayEpisode = { series, episode ->
-                                    val currentProfile = appProfileState
-                                    if (!FeatureAvailabilityPolicy.canPlayEpisode(currentProfile.features)) return@HomeScreen
+                                    val currentIdentity = profileIdentity
+                                    if (!FeatureAvailabilityPolicy.canPlayEpisode(currentIdentity.features)) return@HomeScreen
                                     
-                                    // Check if episode progress already exists to resume it
-                                    coroutineScope.launch {
+                                    playbackEntryJob?.cancel()
+                                    playbackEntryJob = coroutineScope.launch {
                                         var startPos = 0L
-                                        val profileBeforeRead = com.example.config.ProviderConfigRegistry.currentProfile
-                                        if (profileBeforeRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canReadContinueWatching(profileBeforeRead.features, "EPISODE")) {
+                                        if (FeatureAvailabilityPolicy.canReadContinueWatching(currentIdentity.features, "EPISODE")) {
                                             val existing = repository.continueWatching.first()
                                             val progress = existing.firstOrNull { it.contentId == episode.id }
                                             startPos = progress?.positionMs ?: 0L
                                         }
                                         
-                                        val profileAfterRead = com.example.config.ProviderConfigRegistry.currentProfile
-                                        if (profileAfterRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canPlayEpisode(profileAfterRead.features)) {
+                                        if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.canPlayEpisode(profileIdentity.features)) {
                                             activePlaybackItem = PlaybackItem(
                                                 streamUrl = episode.streamUrl,
                                                 title = episode.title,
@@ -292,12 +312,12 @@ class MainActivity : ComponentActivity() {
                                         }
                                     } else null,
                                     onProgressUpdate = { position, duration ->
-                                        val currentProfile = appProfileState
+                                        val currentIdentity = profileIdentity
                                         val cType = if (item.parentId.isNotEmpty()) "EPISODE" else "MOVIE"
-                                        if (!item.isLive && FeatureAvailabilityPolicy.canWriteContinueWatching(currentProfile.features, cType)) {
-                                            coroutineScope.launch {
-                                                val latestProfile = com.example.config.ProviderConfigRegistry.currentProfile
-                                                if (latestProfile.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canWriteContinueWatching(latestProfile.features, cType)) {
+                                        if (!item.isLive && FeatureAvailabilityPolicy.canWriteContinueWatching(currentIdentity.features, cType)) {
+                                            continueWatchingJob?.cancel()
+                                            continueWatchingJob = coroutineScope.launch {
+                                                if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.canWriteContinueWatching(profileIdentity.features, cType)) {
                                                     repository.saveContinueWatching(
                                                         ContinueWatchingEntity(
                                                             contentId = item.contentId,
@@ -320,10 +340,13 @@ class MainActivity : ComponentActivity() {
                                     onBack = {
                                         activePlaybackItem = null
                                     },
-                                    onNextChannel = if (appProfileState.features.liveTvEnabled && item.isLive) {
+                                    onNextChannel = if (profileIdentity.features.liveTvEnabled && item.isLive) {
                                         {
                                             // Channel switching support
-                                            coroutineScope.launch {
+                                            val currentIdentity = profileIdentity
+                                            val currentItem = activePlaybackItem
+                                            playbackEntryJob?.cancel()
+                                            playbackEntryJob = coroutineScope.launch {
                                                 val session = repository.activeSession.first()
                                                 val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
                                                 val currentChannels = if (isDemo) {
@@ -337,24 +360,48 @@ class MainActivity : ComponentActivity() {
                                                         emptyList()
                                                     }
                                                 }
-                                                val idx = currentChannels.indexOfFirst { it.id == item.contentId }
-                                                if (idx != -1 && currentChannels.isNotEmpty()) {
-                                                    val nextChan = currentChannels[(idx + 1) % currentChannels.size]
-                                                    activePlaybackItem = PlaybackItem(
-                                                        streamUrl = nextChan.streamUrl,
-                                                        title = nextChan.name,
-                                                        subtitle = nextChan.categoryName,
-                                                        isLive = true,
-                                                        contentId = nextChan.id,
-                                                        posterOrLogo = nextChan.logoUrl
-                                                    )
+                                                if (profileIdentity == currentIdentity && profileIdentity.features.liveTvEnabled && activePlaybackItem == currentItem) {
+                                                    val idx = currentChannels.indexOfFirst { it.id == item.contentId }
+                                                    if (idx != -1 && currentChannels.isNotEmpty()) {
+                                                        val nextChan = currentChannels[(idx + 1) % currentChannels.size]
+                                                        activePlaybackItem = PlaybackItem(
+                                                            streamUrl = nextChan.streamUrl,
+                                                            title = nextChan.name,
+                                                            subtitle = nextChan.categoryName,
+                                                            isLive = true,
+                                                            contentId = nextChan.id,
+                                                            posterOrLogo = nextChan.logoUrl
+                                                        )
+                                                        
+                                                        // Save Recently Watched for Live channel
+                                                        recentlyWatchedJob?.cancel()
+                                                        if (FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(currentIdentity.features)) {
+                                                            recentlyWatchedJob = coroutineScope.launch {
+                                                                if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(profileIdentity.features)) {
+                                                                    repository.saveRecentlyWatched(
+                                                                        RecentlyWatchedEntity(
+                                                                            contentId = nextChan.id,
+                                                                            contentType = "LIVE",
+                                                                            title = nextChan.name,
+                                                                            posterOrLogo = nextChan.logoUrl,
+                                                                            streamUrl = nextChan.streamUrl,
+                                                                            categoryName = nextChan.categoryName
+                                                                        )
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     } else null,
-                                    onPrevChannel = if (appProfileState.features.liveTvEnabled && item.isLive) {
+                                    onPrevChannel = if (profileIdentity.features.liveTvEnabled && item.isLive) {
                                         {
-                                            coroutineScope.launch {
+                                            val currentIdentity = profileIdentity
+                                            val currentItem = activePlaybackItem
+                                            playbackEntryJob?.cancel()
+                                            playbackEntryJob = coroutineScope.launch {
                                                 val session = repository.activeSession.first()
                                                 val isDemo = session != null && com.example.config.DemoPolicy.isDemoSession(session.username, session.token, session.serverUrl)
                                                 val currentChannels = if (isDemo) {
@@ -368,17 +415,38 @@ class MainActivity : ComponentActivity() {
                                                         emptyList()
                                                     }
                                                 }
-                                                val idx = currentChannels.indexOfFirst { it.id == item.contentId }
-                                                if (idx != -1 && currentChannels.isNotEmpty()) {
-                                                    val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
-                                                    activePlaybackItem = PlaybackItem(
-                                                        streamUrl = prevChan.streamUrl,
-                                                        title = prevChan.name,
-                                                        subtitle = prevChan.categoryName,
-                                                        isLive = true,
-                                                        contentId = prevChan.id,
-                                                        posterOrLogo = prevChan.logoUrl
-                                                    )
+                                                if (profileIdentity == currentIdentity && profileIdentity.features.liveTvEnabled && activePlaybackItem == currentItem) {
+                                                    val idx = currentChannels.indexOfFirst { it.id == item.contentId }
+                                                    if (idx != -1 && currentChannels.isNotEmpty()) {
+                                                        val prevChan = currentChannels[(idx - 1 + currentChannels.size) % currentChannels.size]
+                                                        activePlaybackItem = PlaybackItem(
+                                                            streamUrl = prevChan.streamUrl,
+                                                            title = prevChan.name,
+                                                            subtitle = prevChan.categoryName,
+                                                            isLive = true,
+                                                            contentId = prevChan.id,
+                                                            posterOrLogo = prevChan.logoUrl
+                                                        )
+                                                        
+                                                        // Save Recently Watched for Live channel
+                                                        recentlyWatchedJob?.cancel()
+                                                        if (FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(currentIdentity.features)) {
+                                                            recentlyWatchedJob = coroutineScope.launch {
+                                                                if (profileIdentity == currentIdentity && FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(profileIdentity.features)) {
+                                                                    repository.saveRecentlyWatched(
+                                                                        RecentlyWatchedEntity(
+                                                                            contentId = prevChan.id,
+                                                                            contentType = "LIVE",
+                                                                            title = prevChan.name,
+                                                                            posterOrLogo = prevChan.logoUrl,
+                                                                            streamUrl = prevChan.streamUrl,
+                                                                            categoryName = prevChan.categoryName
+                                                                        )
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

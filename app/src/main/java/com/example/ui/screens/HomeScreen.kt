@@ -548,6 +548,7 @@ fun HomeScreen(
                         isTv = isTv,
                         selectedFootballCompetitionCount = footballState.selectedCompetitionKeys.size,
                         onConfigureFootball = footballViewModel::openSettingsDialog,
+                        onNavigateToEpg = { navigationState.navigateTo(AppDestination.EPG, profile.features) },
                         onDismissCategoryError = settingsViewModel::clearCategoryError
                     )
                 }

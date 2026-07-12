@@ -49,15 +49,19 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         val oldProfile = currentProfile
         currentProfile = profile
 
-        if (oldProfile?.providerId != profile.providerId) {
+        // Completely invalidate search on profile change, regardless of provider
+        if (oldProfile?.id != profile.id) {
+            searchJob?.cancel()
+            activeRequestIdentity = null
+            favoriteMutationJob?.cancel()
             _query.value = ""
             _uiState.update { SearchUiState(query = "") }
         }
-
+        
         if (profile.features.searchEnabled) {
             // Subscribe to favorites
             if (profile.features.favoritesEnabled) {
-                if (favoritesJob == null || oldProfile?.providerId != profile.providerId) {
+                if (favoritesJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                     favoritesJob?.cancel()
                     favoritesJob = viewModelScope.launch {
                         repository.favorites.collect { favs ->
@@ -73,7 +77,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
 
             // Observe Categories
             if (profile.features.liveTvEnabled) {
-                if (liveCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                if (liveCatsJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                     liveCatsJob?.cancel()
                     liveCatsJob = viewModelScope.launch {
                         repository.observeVisibleCategories("LIVE").collect { cats ->
@@ -88,7 +92,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             }
 
             if (profile.features.moviesEnabled) {
-                if (movieCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                if (movieCatsJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                     movieCatsJob?.cancel()
                     movieCatsJob = viewModelScope.launch {
                         repository.observeVisibleCategories("MOVIE").collect { cats ->
@@ -103,7 +107,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             }
 
             if (profile.features.seriesEnabled) {
-                if (seriesCatsJob == null || oldProfile?.providerId != profile.providerId) {
+                if (seriesCatsJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                     seriesCatsJob?.cancel()
                     seriesCatsJob = viewModelScope.launch {
                         repository.observeVisibleCategories("SERIES").collect { cats ->
@@ -118,7 +122,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             }
 
             // Combine inputs for search
-            if (observeInputJob == null || oldProfile?.providerId != profile.providerId) {
+            if (observeInputJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                 observeInputJob?.cancel()
                 observeInputJob = viewModelScope.launch {
                     combine(
@@ -148,7 +152,6 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             movieCatsJob = null
             seriesCatsJob?.cancel()
             seriesCatsJob = null
-
             _query.value = ""
             _uiState.value = SearchUiState()
         }
@@ -169,10 +172,22 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
 
     fun toggleFavorite(favorite: FavoriteEntity) {
         val identity = activeRequestIdentity ?: return
+        val current = currentProfile ?: return
         favoriteMutationJob?.cancel()
         favoriteMutationJob = viewModelScope.launch {
             val profile = currentProfile ?: return@launch
-            if (activeRequestIdentity != identity || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
+            if (activeRequestIdentity != identity || profile.id != current.id) return@launch
+            if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
+            
+            val valid = when (favorite.contentType) {
+                "LIVE" -> profile.features.liveTvEnabled
+                "MOVIE" -> profile.features.moviesEnabled
+                "SERIES" -> profile.features.seriesEnabled
+                "EPISODE" -> profile.features.seriesEnabled
+                else -> false
+            }
+            if (!valid) return@launch
+            
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
             }

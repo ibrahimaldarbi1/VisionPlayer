@@ -106,7 +106,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         
         // Handle Favorites subscription
         if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) {
-            if (favoritesJob == null || oldProfile?.providerId != profile.providerId) {
+            if (favoritesJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                 favoritesJob?.cancel()
                 favoritesJob = viewModelScope.launch {
                     repository.favorites.collect { list ->
@@ -121,12 +121,17 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         }
 
         // Handle Continue Watching subscription
-        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectContinueWatching(profile.features)) {
-            if (continueWatchingJob == null || oldProfile?.providerId != profile.providerId) {
+        val cwEnabled = com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectContinueWatching(profile.features)
+        val hasContentEnabled = profile.features.moviesEnabled || profile.features.seriesEnabled
+        if (cwEnabled && hasContentEnabled) {
+            if (continueWatchingJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.features?.moviesEnabled != profile.features.moviesEnabled || oldProfile?.features?.seriesEnabled != profile.features.seriesEnabled || oldProfile?.id != profile.id) {
                 continueWatchingJob?.cancel()
                 continueWatchingJob = viewModelScope.launch {
                     repository.continueWatching.collect { list ->
-                        _continueWatching.value = list
+                        _continueWatching.value = list.filter {
+                            (it.contentType == "MOVIE" && profile.features.moviesEnabled) ||
+                            (it.contentType == "EPISODE" && profile.features.seriesEnabled)
+                        }
                     }
                 }
             }
@@ -138,7 +143,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
 
         // Handle Recently Watched subscription
         if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(profile.features)) {
-            if (recentlyWatchedJob == null || oldProfile?.providerId != profile.providerId) {
+            if (recentlyWatchedJob == null || oldProfile?.providerId != profile.providerId || oldProfile?.id != profile.id) {
                 recentlyWatchedJob?.cancel()
                 recentlyWatchedJob = viewModelScope.launch {
                     repository.recentlyWatched.collect { list ->
@@ -186,10 +191,20 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
 
     fun toggleFavorite(favorite: FavoriteEntity) {
         val identity = activeRequestIdentity ?: return
+        val current = currentProfile ?: return
         favoriteMutationJob?.cancel()
         favoriteMutationJob = viewModelScope.launch {
             val profile = currentProfile ?: return@launch
-            if (activeRequestIdentity != identity || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
+            if (activeRequestIdentity != identity || profile.id != current.id || profile.id != identity.profileId) return@launch
+            if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
+            
+            val valid = when (favorite.contentType) {
+                "LIVE" -> profile.features.liveTvEnabled
+                "MOVIE" -> profile.features.moviesEnabled
+                "SERIES" -> profile.features.seriesEnabled
+                else -> false
+            }
+            if (!valid) return@launch
             
             val isFav = _favorites.value.any { it.contentId == favorite.contentId && it.contentType == favorite.contentType }
             if (isFav) {

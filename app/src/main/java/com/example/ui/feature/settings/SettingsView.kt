@@ -44,6 +44,7 @@ fun SettingsView(
     isTv: Boolean,
     selectedFootballCompetitionCount: Int,
     onConfigureFootball: () -> Unit = {},
+    onNavigateToEpg: (() -> Unit)? = null,
     onDismissCategoryError: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -161,6 +162,31 @@ fun SettingsView(
                 }
             }
 
+            if (!isTv && com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowEpg(profile.features) && onNavigateToEpg != null) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier
+                            .clickable(onClick = onNavigateToEpg)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFF334155).copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(20.dp)
+                            )
+                    ) {
+                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DateRange, "EPG Guide", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column {
+                                Text("TV Guide", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                Text("View electronic program guide", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!isTv && profile.features.searchEnabled) {
                 item {
                     Card(
@@ -213,7 +239,7 @@ fun SettingsView(
                 }
             }
 
-            if (profile.features.multiViewEnabled) {
+            if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) {
                 item {
                     val activityManager = remember { context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager }
                     val isLowMemoryDevice = remember { activityManager?.isLowRamDevice == true }

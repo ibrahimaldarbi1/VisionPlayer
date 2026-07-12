@@ -35,6 +35,15 @@ sealed class HomeEvent {
 }
 
 class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
+
+    private data class HomeRequestIdentity(
+        val profileId: String,
+        val providerId: String,
+        val backendBaseUrl: String,
+        val moviesEnabled: Boolean,
+        val seriesEnabled: Boolean
+    )
+
     private val _uiState = MutableStateFlow<HomeUiState>(HomeUiState.Loading)
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
@@ -59,6 +68,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
     val events: SharedFlow<HomeEvent> = _events.asSharedFlow()
 
     private var currentProfile: ProviderProfile? = null
+    private var activeRequestIdentity: HomeRequestIdentity? = null
     private var matchingJob: Job? = null
 
     fun onProfileChanged(profile: ProviderProfile) {
@@ -70,13 +80,32 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
             matchingJob = null
             _unavailableTmdbItem.value = null
         }
-        
-        if (oldProfile?.providerId != profile.providerId) {
-            loadHomeData(profile.providerId)
-        }
 
+        val homeEnabled = com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowHomeRecommendations(profile.features)
+        
+        if (!homeEnabled) {
+            loadHomeJob?.cancel()
+            loadHomeJob = null
+            activeRequestIdentity = null
+            _uiState.value = HomeUiState.Empty
+            _unavailableTmdbItem.value = null
+        } else {
+            val newIdentity = HomeRequestIdentity(
+                profileId = profile.id,
+                providerId = profile.providerId,
+                backendBaseUrl = profile.backendBaseUrl,
+                moviesEnabled = profile.features.moviesEnabled,
+                seriesEnabled = profile.features.seriesEnabled
+            )
+            
+            if (activeRequestIdentity != newIdentity) {
+                activeRequestIdentity = newIdentity
+                loadHomeData(newIdentity)
+            }
+        }
+        
         // Handle Favorites subscription
-        if (profile.features.favoritesEnabled) {
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) {
             if (favoritesJob == null || oldProfile?.providerId != profile.providerId) {
                 favoritesJob?.cancel()
                 favoritesJob = viewModelScope.launch {
@@ -92,7 +121,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         }
 
         // Handle Continue Watching subscription
-        if (profile.features.continueWatchingEnabled) {
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectContinueWatching(profile.features)) {
             if (continueWatchingJob == null || oldProfile?.providerId != profile.providerId) {
                 continueWatchingJob?.cancel()
                 continueWatchingJob = viewModelScope.launch {
@@ -108,7 +137,7 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         }
 
         // Handle Recently Watched subscription
-        if (profile.features.recentlyWatchedEnabled) {
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(profile.features)) {
             if (recentlyWatchedJob == null || oldProfile?.providerId != profile.providerId) {
                 recentlyWatchedJob?.cancel()
                 recentlyWatchedJob = viewModelScope.launch {
@@ -124,16 +153,22 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
         }
     }
 
-    fun loadHomeData(providerId: String) {
+    private fun loadHomeData(identity: HomeRequestIdentity) {
         loadHomeJob?.cancel()
         _uiState.value = HomeUiState.Loading
         loadHomeJob = viewModelScope.launch {
-            repository.loadHome(providerId)
+            repository.loadHome(identity.providerId, identity.backendBaseUrl)
                 .onSuccess { response ->
+                    if (activeRequestIdentity != identity) return@onSuccess
+                    
                     val rows = response.rows ?: emptyList()
                     val validRows = rows.filter { row ->
-                        row.items != null && row.items.isNotEmpty()
+                        row.items != null && row.items.isNotEmpty() &&
+                        ((row.type == "movie" && identity.moviesEnabled) || 
+                         (row.type == "series" && identity.seriesEnabled) || 
+                         (row.type != "movie" && row.type != "series"))
                     }
+
                     if (validRows.isEmpty()) {
                         _uiState.value = HomeUiState.Empty
                     } else {
@@ -141,15 +176,21 @@ class HomeViewModel(private val repository: IptvRepository) : ViewModel() {
                     }
                 }
                 .onFailure { error ->
+                    if (activeRequestIdentity != identity) return@onFailure
                     _uiState.value = HomeUiState.Error(error.message ?: "Failed to connect to trending backend service.")
                 }
         }
     }
 
+    private var favoriteMutationJob: Job? = null
+
     fun toggleFavorite(favorite: FavoriteEntity) {
-        val profile = currentProfile ?: return
-        if (!profile.features.favoritesEnabled) return
-        viewModelScope.launch {
+        val identity = activeRequestIdentity ?: return
+        favoriteMutationJob?.cancel()
+        favoriteMutationJob = viewModelScope.launch {
+            val profile = currentProfile ?: return@launch
+            if (activeRequestIdentity != identity || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
+            
             val isFav = _favorites.value.any { it.contentId == favorite.contentId && it.contentType == favorite.contentType }
             if (isFav) {
                 repository.removeFavorite(favorite.contentId, favorite.contentType)

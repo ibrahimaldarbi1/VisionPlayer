@@ -47,14 +47,19 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
 
         // 1. Ensure category management selects an enabled content tab after profile features change.
         val enabledTabs = mutableListOf<String>()
-        if (profile.features.liveTvEnabled) enabledTabs.add("LIVE")
-        if (profile.features.moviesEnabled) enabledTabs.add("MOVIE")
-        if (profile.features.seriesEnabled) enabledTabs.add("SERIES")
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "LIVE")) enabledTabs.add("LIVE")
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "MOVIE")) enabledTabs.add("MOVIE")
+        if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "SERIES")) enabledTabs.add("SERIES")
 
         val currentTab = _uiState.value.selectedTab
         if (currentTab !in enabledTabs) {
             val newTab = enabledTabs.firstOrNull() ?: "LIVE"
             _uiState.update { it.copy(selectedTab = newTab) }
+        }
+        
+        if (enabledTabs.isEmpty() && _uiState.value.subScreen == "CATEGORY_MANAGEMENT") {
+            setSubScreen(null)
+            return
         }
 
         // 2. If the subScreen is category management, update our observations
@@ -85,9 +90,9 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     private fun isTabEnabled(tab: String): Boolean {
         val profile = currentProfile ?: return false
         return when (tab) {
-            "LIVE" -> profile.features.liveTvEnabled
-            "MOVIE" -> profile.features.moviesEnabled
-            "SERIES" -> profile.features.seriesEnabled
+            "LIVE" -> com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "LIVE")
+            "MOVIE" -> com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "MOVIE")
+            "SERIES" -> com.example.ui.feature.shell.FeatureAvailabilityPolicy.canManageCategory(profile.features, "SERIES")
             else -> false
         }
     }
@@ -110,6 +115,8 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
     }
 
     fun refreshCache() {
+        val profile = currentProfile ?: return
+        if (!com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(profile.features)) return
         _uiState.update { it.copy(isRefreshingCache = true) }
         viewModelScope.launch {
             try {
@@ -139,6 +146,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         startOperation()
         viewModelScope.launch {
             try {
+                if (!isTabEnabled(tab)) return@launch
                 repository.updateCategorySortOrder(tab, listIds)
             } catch (e: Exception) {
                 _uiState.update { it.copy(categoryError = e.message) }
@@ -154,6 +162,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         startOperation()
         viewModelScope.launch {
             try {
+                if (!isTabEnabled(tab)) return@launch
                 repository.setCategoryPinned(tab, categoryId, pinned)
             } catch (e: Exception) {
                 _uiState.update { it.copy(categoryError = e.message) }
@@ -169,6 +178,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         startOperation()
         viewModelScope.launch {
             try {
+                if (!isTabEnabled(tab)) return@launch
                 repository.setCategoryHidden(tab, categoryId, hidden)
             } catch (e: Exception) {
                 _uiState.update { it.copy(categoryError = e.message) }
@@ -184,6 +194,7 @@ class SettingsViewModel(private val repository: IptvRepository) : ViewModel() {
         startOperation()
         viewModelScope.launch {
             try {
+                if (!isTabEnabled(tab)) return@launch
                 repository.resetCategoryCustomization(tab)
             } catch (e: Exception) {
                 _uiState.update { it.copy(categoryError = e.message) }

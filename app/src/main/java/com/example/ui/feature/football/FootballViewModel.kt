@@ -20,6 +20,7 @@ class FootballViewModel(
     private val _uiState = MutableStateFlow(FootballUiState())
     val uiState: StateFlow<FootballUiState> = _uiState.asStateFlow()
 
+    private var currentProfile: ProviderProfile? = null
     private var isHomeVisible: Boolean = false
     private var currentProviderId: String? = null
 
@@ -42,7 +43,8 @@ class FootballViewModel(
     }
 
     fun onProfileChanged(profile: ProviderProfile) {
-        val isEnabled = profile.features.footballScheduleEnabled
+        currentProfile = profile
+        val isEnabled = com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowFootball(profile.features)
         val providerId = profile.providerId
 
         if (!isEnabled) {
@@ -172,6 +174,8 @@ class FootballViewModel(
         activeCompetitionJob = viewModelScope.launch {
             try {
                 val freshComps = dataSource.getCompetitions(providerId, forceRefresh)
+                val profile = currentProfile
+                if (profile == null || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowFootball(profile.features)) return@launch
                 if (requestGeneration == competitionGeneration) {
                     _uiState.update {
                         it.copy(
@@ -241,6 +245,8 @@ class FootballViewModel(
 
             try {
                 val matches = dataSource.getSchedule(providerId, normalizedKeys)
+                val profile = currentProfile
+                if (profile == null || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldShowFootball(profile.features)) return@launch
                 if (requestGeneration == scheduleGeneration) {
                     _uiState.update {
                         it.copy(
@@ -333,6 +339,7 @@ class FootballViewModel(
     }
 
     fun saveInitialSetupSelection(selectedKeys: Set<String>, providerId: String) {
+        if (!_uiState.value.featureEnabled) return
         val normalized = selectedKeys.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         if (normalized.isEmpty()) {
             return
@@ -357,6 +364,7 @@ class FootballViewModel(
     }
 
     fun saveSettingsSelection(selectedKeys: Set<String>, providerId: String) {
+        if (!_uiState.value.featureEnabled) return
         val normalized = selectedKeys.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         if (normalized.isEmpty()) {
             return
@@ -378,6 +386,7 @@ class FootballViewModel(
     }
 
     fun setShowOnHome(enabled: Boolean, providerId: String) {
+        if (!_uiState.value.featureEnabled) return
         dataSource.setShowOnHome(enabled)
         _uiState.update { currentState ->
             currentState.copy(
@@ -388,6 +397,7 @@ class FootballViewModel(
     }
 
     fun openSetupDialog() {
+        if (!_uiState.value.featureEnabled) return
         _uiState.update { currentState ->
             currentState.copy(
                 setupDialogVisible = true,
@@ -419,6 +429,7 @@ class FootballViewModel(
     }
 
     fun openSettingsDialog() {
+        if (!_uiState.value.featureEnabled) return
         _uiState.update { currentState ->
             currentState.copy(
                 settingsDialogVisible = true,
@@ -436,6 +447,7 @@ class FootballViewModel(
     }
 
     fun selectCompetition(key: String) {
+        if (!_uiState.value.featureEnabled) return
         _uiState.update { currentState ->
             val newDraft = if (currentState.draftCompetitionKeys.contains(key)) {
                 currentState.draftCompetitionKeys - key
@@ -453,6 +465,7 @@ class FootballViewModel(
     }
 
     fun selectAllCompetitions() {
+        if (!_uiState.value.featureEnabled) return
         _uiState.update { currentState ->
             val allKeys = currentState.competitions.map { it.competitionKey }.toSet()
             currentState.copy(draftCompetitionKeys = allKeys)

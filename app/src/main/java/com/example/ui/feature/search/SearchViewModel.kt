@@ -165,10 +165,14 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         _query.value = newQuery
     }
 
+    private var favoriteMutationJob: Job? = null
+
     fun toggleFavorite(favorite: FavoriteEntity) {
-        val profile = currentProfile ?: return
-        if (!profile.features.searchEnabled || !profile.features.favoritesEnabled) return
-        viewModelScope.launch {
+        val identity = activeRequestIdentity ?: return
+        favoriteMutationJob?.cancel()
+        favoriteMutationJob = viewModelScope.launch {
+            val profile = currentProfile ?: return@launch
+            if (activeRequestIdentity != identity || !com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectFavorites(profile.features)) return@launch
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
             }
@@ -180,36 +184,59 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
         }
     }
 
+    private data class SearchRequestIdentity(
+        val profileId: String,
+        val providerId: String,
+        val query: String,
+        val searchEnabled: Boolean,
+        val liveTvEnabled: Boolean,
+        val moviesEnabled: Boolean,
+        val seriesEnabled: Boolean
+    )
+
+    private var activeRequestIdentity: SearchRequestIdentity? = null
+
     private fun performSearch(input: SearchInput) {
         searchJob?.cancel()
         val profile = currentProfile
         if (profile == null || !profile.features.searchEnabled || input.queryText.isBlank()) {
+            activeRequestIdentity = null
             _uiState.update { it.copy(results = SearchResults(), isLoading = false, error = null) }
             return
         }
 
+        val identity = SearchRequestIdentity(
+            profileId = profile.id,
+            providerId = profile.providerId,
+            query = input.queryText,
+            searchEnabled = profile.features.searchEnabled,
+            liveTvEnabled = profile.features.liveTvEnabled,
+            moviesEnabled = profile.features.moviesEnabled,
+            seriesEnabled = profile.features.seriesEnabled
+        )
+        activeRequestIdentity = identity
+
         _uiState.update { it.copy(isLoading = true, error = null) }
-        val searchForQuery = input.queryText
-        val searchForProviderId = profile.providerId
 
         searchJob = viewModelScope.launch {
             try {
                 repository.searchContent(
-                    input.queryText,
-                    profile.features.liveTvEnabled,
-                    profile.features.moviesEnabled,
-                    profile.features.seriesEnabled
+                    identity.query,
+                    identity.liveTvEnabled,
+                    identity.moviesEnabled,
+                    identity.seriesEnabled
                 ).collect { results ->
-                    if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId && currentProfile?.features?.searchEnabled == true) {
+                    if (activeRequestIdentity == identity) {
                         val visibleLiveIds = input.liveCats.map { it.id }.toSet()
                         val visibleMovieIds = input.movieCats.map { it.id }.toSet()
                         val visibleSeriesIds = input.seriesCats.map { it.id }.toSet()
 
                         val filteredResults = results.copy(
-                            liveChannels = results.liveChannels.filter { it.categoryId in visibleLiveIds },
-                            movies = results.movies.filter { it.categoryId in visibleMovieIds },
-                            series = results.series.filter { it.categoryId in visibleSeriesIds }
+                            liveChannels = if (identity.liveTvEnabled) results.liveChannels.filter { it.categoryId in visibleLiveIds } else emptyList(),
+                            movies = if (identity.moviesEnabled) results.movies.filter { it.categoryId in visibleMovieIds } else emptyList(),
+                            series = if (identity.seriesEnabled) results.series.filter { it.categoryId in visibleSeriesIds } else emptyList()
                         )
+
                         _uiState.update {
                             it.copy(
                                 results = filteredResults,
@@ -222,7 +249,7 @@ class SearchViewModel(private val repository: IptvRepository) : ViewModel() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (_query.value == searchForQuery && currentProfile?.providerId == searchForProviderId && currentProfile?.features?.searchEnabled == true) {
+                if (activeRequestIdentity == identity) {
                     _uiState.update {
                         it.copy(
                             isLoading = false,

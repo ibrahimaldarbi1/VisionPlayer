@@ -89,10 +89,15 @@ class MoviesViewModel(private val repository: IptvRepository) : ViewModel() {
         loadMovies()
     }
 
+    private var favoriteMutationJob: Job? = null
+
     fun toggleFavorite(favorite: FavoriteEntity) {
-        val profile = currentProfile ?: return
-        if (!profile.features.moviesEnabled || !profile.features.favoritesEnabled) return
-        viewModelScope.launch {
+        val originalProfile = currentProfile ?: return
+        if (!originalProfile.features.moviesEnabled || !originalProfile.features.favoritesEnabled) return
+        favoriteMutationJob?.cancel()
+        favoriteMutationJob = viewModelScope.launch {
+            val latestProfile = currentProfile ?: return@launch
+            if (latestProfile.providerId != originalProfile.providerId || !latestProfile.features.moviesEnabled || !latestProfile.features.favoritesEnabled) return@launch
             val isFav = _uiState.value.favorites.any {
                 it.contentId == favorite.contentId && it.contentType == favorite.contentType
             }

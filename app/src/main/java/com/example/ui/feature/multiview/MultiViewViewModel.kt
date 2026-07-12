@@ -20,7 +20,10 @@ class MultiViewViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(MultiViewUiState())
     val uiState: StateFlow<MultiViewUiState> = _uiState.asStateFlow()
 
+    private var currentProfile: ProviderProfile? = null
+
     fun onProfileChanged(profile: ProviderProfile) {
+        currentProfile = profile
         val multiViewEnabled = FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)
         if (!multiViewEnabled) {
             clearMultiView()
@@ -38,6 +41,8 @@ class MultiViewViewModel : ViewModel() {
     }
 
     fun launchMultiView(selected: List<LiveChannel>) {
+        val profile = currentProfile
+        if (profile == null || !FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) return
         _uiState.update {
             it.copy(
                 activeMultiViewChannels = selected,
@@ -47,10 +52,14 @@ class MultiViewViewModel : ViewModel() {
     }
 
     fun showSetup(show: Boolean) {
+        val profile = currentProfile
+        if (profile == null || !FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) return
         _uiState.update { it.copy(showMultiViewSetup = show) }
     }
 
     fun addToPending(channel: LiveChannel) {
+        val profile = currentProfile
+        if (profile == null || !FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) return
         _uiState.update { state ->
             val updatedPending = if (state.pendingMultiViewChannels.none { it.id == channel.id }) {
                 state.pendingMultiViewChannels + channel
@@ -65,10 +74,14 @@ class MultiViewViewModel : ViewModel() {
     }
 
     fun setPendingChannels(channels: List<LiveChannel>) {
+        val profile = currentProfile
+        if (profile == null || !FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) return
         _uiState.update { it.copy(pendingMultiViewChannels = channels) }
     }
 
     fun updateActiveChannels(channels: List<LiveChannel>?) {
+        val profile = currentProfile
+        if (profile == null || !FeatureAvailabilityPolicy.shouldShowMultiView(profile.features)) return
         _uiState.update { it.copy(activeMultiViewChannels = channels) }
     }
 }

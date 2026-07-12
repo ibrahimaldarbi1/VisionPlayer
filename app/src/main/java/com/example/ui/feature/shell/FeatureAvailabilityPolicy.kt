@@ -70,11 +70,11 @@ object FeatureAvailabilityPolicy {
 
     fun shouldShowMultiView(
         features: FeatureConfig
-    ): Boolean = features.multiViewEnabled
+    ): Boolean = features.liveTvEnabled && features.multiViewEnabled
 
     fun shouldShowFootball(
         features: FeatureConfig
-    ): Boolean = features.footballScheduleEnabled
+    ): Boolean = features.liveTvEnabled && features.footballScheduleEnabled
 
     fun shouldCollectFavorites(
         features: FeatureConfig
@@ -82,9 +82,66 @@ object FeatureAvailabilityPolicy {
 
     fun shouldCollectRecentlyWatched(
         features: FeatureConfig
-    ): Boolean = features.recentlyWatchedEnabled
+    ): Boolean = features.liveTvEnabled && features.recentlyWatchedEnabled
 
     fun shouldCollectContinueWatching(
         features: FeatureConfig
     ): Boolean = features.continueWatchingEnabled
+
+    fun shouldShowEpg(
+        features: FeatureConfig
+    ): Boolean = features.liveTvEnabled && features.epgEnabled
+
+    fun shouldShowHomeRecommendations(
+        features: FeatureConfig
+    ): Boolean = features.moviesEnabled || features.seriesEnabled
+
+    fun canPlayLive(
+        features: FeatureConfig
+    ): Boolean = features.liveTvEnabled
+
+    fun canPlayMovie(
+        features: FeatureConfig
+    ): Boolean = features.moviesEnabled
+
+    fun canPlayEpisode(
+        features: FeatureConfig
+    ): Boolean = features.seriesEnabled
+
+    fun canReadContinueWatching(
+        features: FeatureConfig,
+        contentType: String
+    ): Boolean {
+        if (!features.continueWatchingEnabled) return false
+        return when (contentType) {
+            "MOVIE" -> features.moviesEnabled
+            "EPISODE" -> features.seriesEnabled
+            else -> false
+        }
+    }
+
+    fun canWriteContinueWatching(
+        features: FeatureConfig,
+        contentType: String
+    ): Boolean = canReadContinueWatching(features, contentType)
+
+    fun canManageCategories(
+        features: FeatureConfig
+    ): Boolean = features.liveTvEnabled || features.moviesEnabled || features.seriesEnabled
+
+    fun canManageCategory(
+        features: FeatureConfig,
+        contentType: String
+    ): Boolean {
+        return when (contentType) {
+            "LIVE" -> features.liveTvEnabled
+            "MOVIE" -> features.moviesEnabled
+            "SERIES" -> features.seriesEnabled
+            else -> false
+        }
+    }
+
+    fun canRefreshEpg(
+        features: FeatureConfig
+    ): Boolean = features.liveTvEnabled && features.epgEnabled
 }

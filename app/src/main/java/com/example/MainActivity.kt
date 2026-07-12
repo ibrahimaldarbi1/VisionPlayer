@@ -107,9 +107,13 @@ class MainActivity : ComponentActivity() {
                                 addToMultiViewChannel = globalAddToMultiViewChannel,
                                 onAddToMultiViewHandled = { globalAddToMultiViewChannel = null },
                                 onPlayLive = { channel ->
+                                    val currentProfile = appProfileState
+                                    if (!FeatureAvailabilityPolicy.canPlayLive(currentProfile.features)) return@HomeScreen
+                                    
                                     // Save Recently Watched for Live channel
-                                    if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(appProfileState.features) && appProfileState.features.liveTvEnabled) {
-                                        coroutineScope.launch {
+                                    coroutineScope.launch {
+                                        val latestProfile = com.example.config.ProviderConfigRegistry.currentProfile
+                                        if (latestProfile.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.shouldCollectRecentlyWatched(latestProfile.features)) {
                                             repository.saveRecentlyWatched(
                                                 RecentlyWatchedEntity(
                                                     contentId = channel.id,
@@ -122,7 +126,6 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
                                     }
-
                                     activePlaybackItem = PlaybackItem(
                                         streamUrl = channel.streamUrl,
                                         title = channel.name,
@@ -133,49 +136,63 @@ class MainActivity : ComponentActivity() {
                                     )
                                 },
                                 onPlayMovie = { movie ->
+                                    val currentProfile = appProfileState
+                                    if (!FeatureAvailabilityPolicy.canPlayMovie(currentProfile.features)) return@HomeScreen
+                                    
                                     // Check if movie progress already exists to resume it
                                     coroutineScope.launch {
                                         var startPos = 0L
-                                        if (FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features) && appProfileState.features.moviesEnabled) {
+                                        val profileBeforeRead = com.example.config.ProviderConfigRegistry.currentProfile
+                                        if (profileBeforeRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canReadContinueWatching(profileBeforeRead.features, "MOVIE")) {
                                             val existing = repository.continueWatching.first()
                                             val progress = existing.firstOrNull { it.contentId == movie.id }
                                             startPos = progress?.positionMs ?: 0L
                                         }
-
-                                        activePlaybackItem = PlaybackItem(
-                                            streamUrl = movie.streamUrl,
-                                            title = movie.title,
-                                            subtitle = movie.genre,
-                                            isLive = false,
-                                            contentId = movie.id,
-                                            posterOrLogo = movie.posterUrl,
-                                            initialPositionMs = startPos
-                                        )
+                                        
+                                        val profileAfterRead = com.example.config.ProviderConfigRegistry.currentProfile
+                                        if (profileAfterRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canPlayMovie(profileAfterRead.features)) {
+                                            activePlaybackItem = PlaybackItem(
+                                                streamUrl = movie.streamUrl,
+                                                title = movie.title,
+                                                subtitle = movie.genre,
+                                                isLive = false,
+                                                contentId = movie.id,
+                                                posterOrLogo = movie.posterUrl,
+                                                initialPositionMs = startPos
+                                            )
+                                        }
                                     }
                                 },
                                 onPlayEpisode = { series, episode ->
+                                    val currentProfile = appProfileState
+                                    if (!FeatureAvailabilityPolicy.canPlayEpisode(currentProfile.features)) return@HomeScreen
+                                    
                                     // Check if episode progress already exists to resume it
                                     coroutineScope.launch {
                                         var startPos = 0L
-                                        if (FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features) && appProfileState.features.seriesEnabled) {
+                                        val profileBeforeRead = com.example.config.ProviderConfigRegistry.currentProfile
+                                        if (profileBeforeRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canReadContinueWatching(profileBeforeRead.features, "EPISODE")) {
                                             val existing = repository.continueWatching.first()
                                             val progress = existing.firstOrNull { it.contentId == episode.id }
                                             startPos = progress?.positionMs ?: 0L
                                         }
-
-                                        activePlaybackItem = PlaybackItem(
-                                            streamUrl = episode.streamUrl,
-                                            title = episode.title,
-                                            subtitle = "${series.title} - S${episode.seasonNumber} E${episode.episodeNumber}",
-                                            isLive = false,
-                                            contentId = episode.id,
-                                            parentId = series.id,
-                                            parentTitle = series.title,
-                                            posterOrLogo = series.posterUrl,
-                                            seasonNum = episode.seasonNumber,
-                                            episodeNum = episode.episodeNumber,
-                                            initialPositionMs = startPos
-                                        )
+                                        
+                                        val profileAfterRead = com.example.config.ProviderConfigRegistry.currentProfile
+                                        if (profileAfterRead.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canPlayEpisode(profileAfterRead.features)) {
+                                            activePlaybackItem = PlaybackItem(
+                                                streamUrl = episode.streamUrl,
+                                                title = episode.title,
+                                                subtitle = "${series.title} - S${episode.seasonNumber} E${episode.episodeNumber}",
+                                                isLive = false,
+                                                contentId = episode.id,
+                                                parentId = series.id,
+                                                parentTitle = series.title,
+                                                posterOrLogo = series.posterUrl,
+                                                seasonNum = episode.seasonNumber,
+                                                episodeNum = episode.episodeNumber,
+                                                initialPositionMs = startPos
+                                            )
+                                        }
                                     }
                                 },
                                 onNavigateToSupport = if (FeatureAvailabilityPolicy.shouldShowSupport(appProfileState.features)) {
@@ -275,31 +292,35 @@ class MainActivity : ComponentActivity() {
                                         }
                                     } else null,
                                     onProgressUpdate = { position, duration ->
-                                        // Live progress tracker persistence (Do not save live feeds progress)
-                                        if (!item.isLive && FeatureAvailabilityPolicy.shouldCollectContinueWatching(appProfileState.features)) {
+                                        val currentProfile = appProfileState
+                                        val cType = if (item.parentId.isNotEmpty()) "EPISODE" else "MOVIE"
+                                        if (!item.isLive && FeatureAvailabilityPolicy.canWriteContinueWatching(currentProfile.features, cType)) {
                                             coroutineScope.launch {
-                                                repository.saveContinueWatching(
-                                                    ContinueWatchingEntity(
-                                                        contentId = item.contentId,
-                                                        parentId = item.parentId,
-                                                        contentType = if (item.parentId.isNotEmpty()) "EPISODE" else "MOVIE",
-                                                        title = item.title,
-                                                        parentTitle = item.parentTitle,
-                                                        posterOrLogo = item.posterOrLogo,
-                                                        streamUrl = item.streamUrl,
-                                                        positionMs = position,
-                                                        durationMs = duration,
-                                                        seasonNumber = item.seasonNum,
-                                                        episodeNumber = item.episodeNum
+                                                val latestProfile = com.example.config.ProviderConfigRegistry.currentProfile
+                                                if (latestProfile.providerId == currentProfile.providerId && FeatureAvailabilityPolicy.canWriteContinueWatching(latestProfile.features, cType)) {
+                                                    repository.saveContinueWatching(
+                                                        ContinueWatchingEntity(
+                                                            contentId = item.contentId,
+                                                            parentId = item.parentId,
+                                                            contentType = cType,
+                                                            title = item.title,
+                                                            parentTitle = item.parentTitle,
+                                                            posterOrLogo = item.posterOrLogo,
+                                                            streamUrl = item.streamUrl,
+                                                            positionMs = position,
+                                                            durationMs = duration,
+                                                            seasonNumber = item.seasonNum,
+                                                            episodeNumber = item.episodeNum
+                                                        )
                                                     )
-                                                )
+                                                }
                                             }
                                         }
                                     },
                                     onBack = {
                                         activePlaybackItem = null
                                     },
-                                    onNextChannel = if (appProfileState.features.liveTvEnabled) {
+                                    onNextChannel = if (appProfileState.features.liveTvEnabled && item.isLive) {
                                         {
                                             // Channel switching support
                                             coroutineScope.launch {
@@ -331,7 +352,7 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     } else null,
-                                    onPrevChannel = if (appProfileState.features.liveTvEnabled) {
+                                    onPrevChannel = if (appProfileState.features.liveTvEnabled && item.isLive) {
                                         {
                                             coroutineScope.launch {
                                                 val session = repository.activeSession.first()

@@ -324,45 +324,49 @@ fun SettingsView(
                 }
             }
 
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.border(
-                        width = 1.dp,
-                        color = Color(0xFF334155).copy(alpha = 0.3f),
-                        shape = RoundedCornerShape(20.dp)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Settings, "Stream Format", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
-                            Spacer(modifier = Modifier.width(16.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Live Stream Format", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
-                                Text("Switch format if Live streams fail to play (TS vs HLS/M3U8)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+            if (profile.features.liveTvEnabled) {
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(profile.branding.surfaceColor)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.border(
+                            width = 1.dp,
+                            color = Color(0xFF334155).copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(20.dp)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Settings, "Stream Format", tint = Color(profile.branding.primaryColor), modifier = Modifier.size(36.dp))
+                                Spacer(modifier = Modifier.width(16.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Live Stream Format", style = MaterialTheme.typography.titleMedium, color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text("Switch format if Live streams fail to play (TS vs HLS/M3U8)", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("TS", "M3U8").forEach { format ->
-                                val isSelected = streamFormat == format
-                                Button(
-                                    onClick = {
-                                        streamFormat = format
-                                        sharedPrefs.edit().putString("stream_format", format).apply()
-                                        onRefreshCache()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = if (isSelected) Color(profile.branding.primaryColor) else Color.DarkGray
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        text = if (format == "TS") "TS (.ts) (Default)" else "HLS (.m3u8)",
-                                        color = Color.White,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("TS", "M3U8").forEach { format ->
+                                    val isSelected = streamFormat == format
+                                    Button(
+                                        onClick = {
+                                            streamFormat = format
+                                            sharedPrefs.edit().putString("stream_format", format).apply()
+                                            if (com.example.ui.feature.shell.FeatureAvailabilityPolicy.canRefreshEpg(profile.features)) {
+                                                onRefreshCache()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) Color(profile.branding.primaryColor) else Color.DarkGray
+                                        ),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = if (format == "TS") "TS (.ts) (Default)" else "HLS (.m3u8)",
+                                            color = Color.White,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    }
                                 }
                             }
                         }
